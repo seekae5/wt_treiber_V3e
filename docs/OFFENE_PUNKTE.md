@@ -1,7 +1,7 @@
 # Offene Punkte — geprüfter Stand 2026-08-20
 
 **Projekt:** `wt3000-scpi 0.3.0`  
-**Basis:** aktueller Quellstand, 670 bestandene Tests, Ruff und Mypy ohne Befund  
+**Basis:** aktueller Quellstand, 682 bestandene Tests, Ruff und Mypy ohne Befund  
 **Abgrenzung:** Geräteverhalten ist nur dort als belegt bezeichnet, wo der Bestand
 einen konkreten Geräteversuch dokumentiert.
 
@@ -33,16 +33,16 @@ gehören jeweils in den Beleg.
 
 ## 2 — Offene Softwarebefunde
 
-### S-01 — Elementliste ist nicht überall geräteabhängig
+### S-01 — Bereichstabellen sind noch nicht modulabhängig — **Rest von M1-3**
 
-`DeviceInfo` und `RangeAccess` kennen die bestückten Elemente. Dagegen liefert
-`InputConfig._elements_of("ALL")` weiterhin fest `(1, 2, 3, 4)`. Auf einem
-3-Element-Gerät können Bereichs- und Eingangszugriff deshalb unterschiedliche Ziele
-verwenden.
+Der Hauptteil ist am 25.08.2026 erledigt: `InputConfig` bekommt dieselbe Elementliste
+wie `RangeAccess`, `_elements_of("ALL")` löst gegen die Bestückung auf, eine
+Elementnummer wird geprüft, und `WT3000.refresh_device()` hält den Steckbrief nach einer
+Umverdrahtung aktuell — nach `set_wiring()` von selbst.
 
-**Ziel:** `InputConfig` erhält dieselbe Elementliste wie `RangeAccess`; Tabellen werden
-nach Modultyp ausgewählt. Unbekannte Kombinationen werden als `WTError` mit Kontext
-statt als `KeyError` gemeldet. Gehört zu M1-3.
+**Offen bleibt:** Die Bereichstabellen (`VOLTAGE_RANGES`, `CURRENT_RANGES`) werden noch
+über feste Schlüssel `(Modultyp, Crest)` ausgewählt. Ein unbekanntes Modul ergibt dort
+weiterhin einen `KeyError` statt einer `WTError` mit Kontext.
 
 ### S-02 — Parser- und Scope-Regeln liegen mehrfach vor
 
@@ -55,14 +55,18 @@ Fällen gleich, insbesondere bei Antworten mit Headern. `target_node()` und
 Normalisierungsregel an genau einer Stelle führen. Gehört zu M2-5 und muss vor neuen
 Konfigurationsgruppen abgeschlossen sein.
 
-### S-03 — `drain_after_failure()` ist nicht in Produktivpfade eingebunden
+### S-03 — `drain_after_failure()` deckt noch nicht alle Fehlerpfade ab
 
-Die Methode existiert und ist getestet, wird aber im Quellcode nicht aufgerufen. Eine
-verspätete Antwort kann dadurch nach einem fehlgeschlagenen Query die nächste Abfrage
-verfälschen.
+**Korrektur:** Die frühere Fassung dieses Befunds — „wird im Quellcode nicht
+aufgerufen“ — trifft nicht mehr zu. Aufgerufen wird die Methode heute an vier Stellen:
+nach `*IDN?` und `*OPT?` in `DeviceInfo.read()`, nach jeder fehlgeschlagenen Abfrage in
+`write_metadata()` und seit M3-3 nach einem fehlgeschlagenen `:RATE?` in
+`device_update_rate()`.
 
-**Ziel:** Zuständigkeit und Timeoutwiederherstellung in `WTSession` festlegen und den
-Ablauf mit simulierten verspäteten Antworten prüfen. Gehört zu M1-5.
+**Offen bleibt:** eine allgemeine Zuständigkeitsregel. Heute entscheidet jede Aufrufstelle
+für sich, ob sie nachräumt; ein fehlgeschlagener Query in einem beliebigen anderen Pfad
+tut es nicht. Dazu gehören die Timeoutwiederherstellung in `WTSession` und ein Test mit
+simulierten verspäteten Antworten. Gehört zu M1-5.
 
 ### S-04 — Schreibfreigabe ist breiter als die übergebenen Gruppen
 
@@ -151,10 +155,12 @@ Die folgenden Aussagen aus den entfernten Momentaufnahmen sind nicht mehr offen:
 | Blockheader erzeugt nackte `ValueError` | P-4: vollständige Validierung als `ProtocolError` |
 | Installation und Python-Version seien nicht deklariert | `pyproject.toml` mit Python ≥ 3.10 und Abhängigkeitsgruppen ist vorhanden |
 | Verbindungsdaten seien feste Quellcodewerte | P-7: Parameter, Umgebung und JSON-Konfiguration; neutrale Defaults |
-| Tests liefen lokal nicht | Projektumgebung vorhanden; 670 Tests aktuell ausgeführt |
+| Tests liefen lokal nicht | Projektumgebung vorhanden; 682 Tests aktuell ausgeführt |
 | Kein Linting, keine Typprüfung, gemischte Zeilenenden | Ruff, Mypy und `.gitattributes` sind eingerichtet |
 | `wt3000_core.py` enthalte einen großen auskommentierten Transportklon | Kommentarbereinigung abgeschlossen |
 | Export sei fest an CSV gekoppelt | M4-1/M4-2: `Sample`, `SampleSink` und vier Senken |
+| Steckbrief veraltet nach einer Umverdrahtung stillschweigend | M1-3: `refresh_device()`, nach `set_wiring()` automatisch |
+| `InputConfig` adressiert `ALL` gegen eine feste Elementliste | M1-3: Elementliste aus `DeviceInfo`, Elementnummer geprüft |
 | Schleifentakt und Geräterate seien unverbunden, Dubletten unerkennbar | M3-3: Taktprüfung vorab, `SampleMark.DUPLICATE` während des Laufs, Rate in den Metadaten |
 
 ---
@@ -162,8 +168,8 @@ Die folgenden Aussagen aus den entfernten Momentaufnahmen sind nicht mehr offen:
 ## 4 — Priorität
 
 1. Gerätetermin H-01 bis H-07 mit reproduzierbarem Protokoll
-2. M1-3/S-01 und M2-5/S-02, damit neue Konfigurationsgruppen nicht auf harten
-   Annahmen oder einer weiteren Parserkopie aufbauen
+2. M2-5/S-02, damit neue Konfigurationsgruppen nicht auf einer weiteren
+   Parserkopie aufbauen (M1-3/S-01 ist bis auf die Bereichstabellen erledigt)
 3. M1-5/S-03 und S-05 für robuste Fehlerpfade
 4. M3-1/S-07 für eine steuerbare Messung
 5. M4-3 und M2-1 für interpretierbare Daten und die fehlenden Gerätegruppen

@@ -173,16 +173,31 @@ Sitzung daher nicht gleichzeitig aus mehreren Threads verwendet werden.
 
 #### Klasse `DeviceInfo`
 
-`wt.device` wird beim Verbindungsaufbau einmal ermittelt. Verfügbare Felder sind
+`wt.device` wird beim Verbindungsaufbau ermittelt. Verfügbare Felder sind
 `identity`, `manufacturer`, `model`, `serial`, `firmware`, `wiring`, `wiring_units`,
 `modules`, `elements`, `sigma_members` und `elements_assumed`.
 
 | Methode | Bedeutung |
 |---|---|
-| `DeviceInfo.read(session)` | Liest den Gerätesteckbrief über reine Queries. Die Fassade ruft dies automatisch auf. |
+| `DeviceInfo.read(session, previous=None)` | Liest den Gerätesteckbrief über reine Queries. Die Fassade ruft dies automatisch auf. Mit `previous` werden Identität und Optionen übernommen statt erneut gefragt. |
 | `describe()` | Liefert den Steckbrief als Liste lesbarer Textzeilen. |
 | `log_summary()` | Schreibt den Steckbrief in das Python-Log. |
 | `has_element(element)` | Prüft, ob ein Element bestückt ist. |
+| `WT3000.refresh_device()` | Liest Verdrahtung, Module und Elementliste neu und zieht `wt.input` und `wt.ranges` nach. |
+
+**Nach einer Umverdrahtung.** Der Steckbrief trägt die Elementliste *und* die Zuordnung
+der Wiring-Units; aus ihm sind `wt.input` und `wt.ranges` verdrahtet. Ändert sich die
+Verdrahtung, ändert sich beides:
+
+* über `wt.input.set_wiring()` — die Fassade frischt **selbsttätig** auf, es ist nichts
+  zu tun;
+* am Bedienfeld oder durch eine zweite Sitzung — dann ist `wt.refresh_device()`
+  aufzurufen, denn davon kann der Treiber nichts erfahren haben.
+
+Ohne Auffrischung löst `wt.ranges.expand_scope("SIGMA")` weiterhin auf die Elemente der
+alten Verdrahtung auf — fehlerfrei, plausibel und falsch. Die Fachobjekte werden dabei
+an Ort und Stelle nachgezogen: eine in einer Variablen gehaltene Referenz auf
+`wt.ranges` bleibt gültig und trägt danach den neuen Stand.
 
 ```python
 with WT3000.connect() as wt:
@@ -452,7 +467,9 @@ sichereren spezialisierten Context Manager aus den folgenden Kapiteln bereit.
 #### Eigenschaft `WT3000.ranges`
 
 `wt.ranges` liefert einen `RangeAccess`, der bereits die bestückten Elemente und die
-SIGMA-Zuordnungen aus `DeviceInfo` kennt.
+SIGMA-Zuordnungen aus `DeviceInfo` kennt. Dasselbe gilt seit M1-3 für `wt.input`: beide
+Wege lösen `ALL` gegen dieselbe, gelesene Elementliste auf, und eine Elementnummer, die
+das Gerät nicht bestückt hat, wird abgelehnt statt gesendet.
 
 ### Datei `wt3000_rangeio.py`
 

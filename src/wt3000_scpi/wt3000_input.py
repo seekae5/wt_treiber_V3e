@@ -30,6 +30,7 @@ from .wt3000_core import WTError, WTSession
 # Bereichswerte werden ausschliesslich hierueber geformt - dieselbe Funktion,
 # die auch wt3000_rangeio.py benutzt. Am Geraet belegt ist die reine NRf-Form
 # ('1000'); zwei Schreibweisen fuer denselben Knoten waeren Befund B-01.
+from .wt3000_common import DEFAULT_ELEMENTS
 from .wt3000_common import canonical_enum_token as _canonical_enum_token
 from .wt3000_common import format_nrf
 
@@ -463,6 +464,11 @@ class InputConfig:
         protected_groups: frozenset[str] = DEFAULT_PROTECTED,
         verify: bool = True,
         check_errors: bool = True,
+        # NEU (ROADMAP M1-3, Befund S-01): die bestueckten Elemente.
+        elements: tuple[int, ...] = DEFAULT_ELEMENTS,
+        # NEU (ROADMAP M1-3, Befund S-01): Rueckruf nach einer Verdrahtungs-
+        # aenderung. Siehe set_wiring().
+        on_wiring_changed: Callable[[], None] | None = None,
     ) -> None:
         self._session = session
         self._allow_changes = allow_changes
@@ -470,6 +476,43 @@ class InputConfig:
         self._verify = verify
         self._check_errors = check_errors
         self._module_cache: dict[int, int] | None = None
+        self._elements = tuple(elements)
+        self._on_wiring_changed = on_wiring_changed
+
+    # -- Geraetebezug -------------------------------------------------------
+    #
+    # NEU (ROADMAP M1-3, Befund S-01). Bis hierher lieferte '_elements_of'
+    # fuer das Ziel 'ALL' die feste Liste (1, 2, 3, 4) - unabhaengig davon,
+    # was am anderen Ende der Leitung steckt. 'RangeAccess' kannte die
+    # bestueckten Elemente laengst; 'InputConfig' nicht. Auf einem
+    # 3-Element-Geraet adressierten die beiden Wege damit unterschiedliche
+    # Ziele, und der bequemere Weg war der schlechtere:
+    #
+    #     wt.ranges.expand_scope("ALL")   -> (1, 2, 3)   richtig
+    #     wt.input._elements_of("ALL")    -> (1, 2, 3, 4) fest verdrahtet
+    #
+    # Die Voreinstellung bleibt DEFAULT_ELEMENTS, damit ein von Hand
+    # gebautes 'InputConfig' sich verhaelt wie bisher. Die Fassade uebergibt
+    # die gelesene Liste - und ab da stimmen beide Wege ueberein.
+
+    @property
+    def elements(self) -> tuple[int, ...]:
+        """Bestueckte Elementnummern, gegen die dieses Objekt arbeitet."""
+        return self._elements
+
+    def configure_elements(self, elements: tuple[int, ...]) -> None:
+        """Elementliste ersetzen - nach einer Verdrahtungsaenderung.
+
+        NEU (ROADMAP M1-3). Bewusst eine Aenderung AM OBJEKT und nicht ein
+        neues Objekt: die Fassade gibt 'wt.input' heraus, und ein Anwender
+        darf sich die Referenz merken. Ein Austausch hinter seinem Ruecken
+        liesse ihn mit dem alten Stand weiterarbeiten - also genau der
+        Fehler, den diese Methode beheben soll.
+        """
+        self._elements = tuple(elements)
+        # Die Modultypen haengen an derselben Abfrage und sind damit ebenso alt.
+        self._module_cache = None
+        _log.debug("InputConfig: Elemente jetzt %s", self._elements)
 
     # -- Sperre -------------------------------------------------------------
 
@@ -580,12 +623,30 @@ class InputConfig:
             self._session.assert_no_error(label)
 
     def _elements_of(self, target: int | str) -> tuple[int, ...]:
-        """Elemente ermitteln, die von einem Ziel betroffen sind."""
+        """Elemente ermitteln, die von einem Ziel betroffen sind.
+
+        UEBERARBEITET (ROADMAP M1-3, Befund S-01): 'ALL' loest gegen die
+        bestueckten Elemente auf, und eine Elementnummer wird geprueft statt
+        durchgereicht. Das ist dieselbe Regel, die 'RangeAccess.expand_scope()'
+        seit Schritt 4 (Befund A-03) durchsetzt - sie fehlte hier als
+        einziger Stelle.
+
+        Der geprueft-durchgereichte Fall ist nicht theoretisch: ein Kommando
+        an ein nicht bestuecktes Element faellt am Geraet nur als Eintrag in
+        der Fehlerqueue auf, also erst bei 'assert_no_error()' - und die
+        anschliessende Rueckleseprobe liest dann einen Knoten, den es nicht
+        gibt.
+        """
         if isinstance(target, int):
+            if target not in self._elements:
+                raise WTError(
+                    f"Element {target} ist nicht bestueckt "
+                    f"(vorhanden: {self._elements})"
+                )
             return (target,)
         token = target.strip().upper()
         if token == "ALL":
-            return (1, 2, 3, 4)
+            return self._elements
         for unit in resolve_wiring_units(self.get_wiring()):
             if unit.name == token:
                 return unit.elements
@@ -719,9 +780,28 @@ class InputConfig:
         Beispiel: set_wiring([Wiring.V3A3, Wiring.P1W2]) -> SigmaA = Elemente
         1..3 (3P3W/3V3A), SigmaB = Element 4 (1P2W).
 
-        Achtung: Mit der Verdrahtung aendert sich, welche Elemente zu welcher
-        Wiring-Unit gehoeren und ob SIGMA/SIGMB ueberhaupt existieren. Alle
-        SIGMA/SIGMB-Kommandos danach sind neu zu bewerten.
+        Mit der Verdrahtung aendert sich, welche Elemente zu welcher
+        Wiring-Unit gehoeren und ob SIGMA/SIGMB ueberhaupt existieren.
+
+        UEBERARBEITET (ROADMAP M1-3, Befund S-01): Bis hierher stand an dieser
+        Stelle der Hinweis "alle SIGMA/SIGMB-Kommandos danach sind neu zu
+        bewerten" - ein Auftrag an den Anwender, den er nicht ausfuehren
+        konnte: der Gerätesteckbrief wurde einmal beim Verbinden gelesen, und
+        eine Methode, ihn aufzufrischen, gab es nicht. Nach einer
+        Umverdrahtung lieferte 'wt.ranges.expand_scope("SIGMA")' still die
+        Elemente der ALTEN Verdrahtung, und die naechste Bereichseinstellung
+        traf das falsche Element, ohne dass irgendwo ein Fehler auftrat.
+
+        Deshalb meldet dieses Objekt die Aenderung jetzt selbst - ueber den
+        Rueckruf 'on_wiring_changed', den die Fassade beim Bau setzt und mit
+        'WT3000.refresh_device()' beantwortet. Wer 'InputConfig' von Hand baut
+        und den Rueckruf weglaesst, ist fuer die Auffrischung weiterhin selbst
+        zustaendig - er hat dann aber auch keine Fachobjekte, die davon
+        abhaengen.
+
+        Der Rueckruf ist ein einfaches Callable und kein Import: Layer 2
+        erfaehrt dadurch nichts ueber Layer 4, und die Importrichtung bleibt,
+        wie 'tests/test_package_layout.py' sie erzwingt.
         """
         tokens = [str(p.value if isinstance(p, Wiring) else p).strip().upper() for p in patterns]
         if not tokens:
@@ -749,6 +829,13 @@ class InputConfig:
             "Verdrahtung setzen",
         )
         self._module_cache = None
+
+        # NEU (ROADMAP M1-3, Befund S-01): erst schreiben und verifizieren,
+        # dann melden. Ein Rueckruf vor der Rueckleseprobe wuerde die
+        # abhaengigen Objekte auf einen Zustand ziehen, den das Geraet
+        # womoeglich gar nicht angenommen hat.
+        if self._on_wiring_changed is not None:
+            self._on_wiring_changed()
 
     # -- Crest-Faktor -------------------------------------------------------
 

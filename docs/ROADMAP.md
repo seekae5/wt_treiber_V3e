@@ -4,7 +4,7 @@
 
 **Abgeschlossen:** M1-1, M1-2, M4-1, M4-2 sowie die Befundpakete P-1…P-8
 
-**Prüfstand:** 670 Tests, Ruff und Mypy ohne Befund
+**Prüfstand:** 682 Tests, Ruff und Mypy ohne Befund
 
 **Bezug:** [OFFENE_PUNKTE.md](OFFENE_PUNKTE.md) ·
 [AENDERUNGEN_2026-08-18.md](AENDERUNGEN_2026-08-18.md)
@@ -26,12 +26,12 @@ Die Kommandoübersicht ist eine Geräte- und keine Implementierungsübersicht.
 
 | Zielfunktion | Vorhanden | Offen | Reifegrad |
 |---|---|---|---|
-| Gerätekonfiguration lesen | `DeviceInfo` liest Identifikation, Verdrahtung, Modultypen und Bestückung; Metadatenabzug liest weitere Gruppen roh | strukturierter Snapshot für Kommunikation, Averaging, Frequenzquelle, Integration, Harmonische und System | **30 %** |
+| Gerätekonfiguration lesen | `DeviceInfo` liest Identifikation, Verdrahtung, Modultypen und Bestückung, auffrischbar über `refresh_device()`; Metadatenabzug liest weitere Gruppen roh | strukturierter Snapshot für Kommunikation, Averaging, Frequenzquelle, Integration, Harmonische und System | **30 %** |
 | Gerätekonfiguration einstellen | sichere Schreib- und Restoremuster für Item-Tabelle, Bereiche und Eingangskonfiguration | Gerätegruppen jenseits `:INPut`, ein gemeinsames Backup, Setup-Speicher | **15 %** |
 | Messkonfiguration | `InputConfig`, `RangePlan`, Snapshots, Diff und Restore | geräteabhängige Element-/Bereichstabellen, `InputPlan`, Eingangsart und unabhängiger Modus setzen | **75 %** |
 | Messsteuerung | blockierende Messschleife, HOLD, driftfreie Taktung, Taktkopplung und Dublettenerkennung, Statistik, `Sample` | start-/stoppbares Objekt, Generator, Geräteintegration, Ereignistakt, Wiederverbindung | **45 %** |
 | Datenexport | `SampleSink`, CSV, JSONL, Callback und Bündel; strenge Spaltenregel | Einheiten, verbindliche Metadaten, Rotation und Fortsetzung | **80 %** |
-| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 670 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
+| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 682 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
 
 Die Fassade und der austauschbare Export sind nicht mehr Zielbild, sondern Bestand.
 Der Schwerpunkt liegt jetzt auf Hardwarebelegen, vollständiger Konfiguration und einer
@@ -139,7 +139,23 @@ beruhen.
 
 `DeviceInfo` ist begonnen, aber noch nicht vollständig:
 
-- dieselbe bestückte Elementliste an `InputConfig` und `RangeAccess` geben
+- [x] **Dieselbe bestückte Elementliste an `InputConfig` und `RangeAccess` —
+  umgesetzt 2026-08-25.** `InputConfig` nimmt `elements` entgegen wie `RangeAccess`
+  seit jeher; die Fassade übergibt beiden `DeviceInfo.elements`. `_elements_of("ALL")`
+  löst damit gegen die Bestückung auf statt gegen die feste Liste `(1, 2, 3, 4)`, und
+  eine Elementnummer wird geprüft statt durchgereicht — dieselbe Regel, die
+  `RangeAccess.expand_scope()` seit Befund A-03 durchsetzt.
+- [x] **Der Steckbrief bleibt aktuell — umgesetzt 2026-08-25.**
+  `WT3000.refresh_device()` liest Verdrahtung, Module und Elementliste neu und zieht
+  `wt.input` und `wt.ranges` **an Ort und Stelle** nach; gehaltene Referenzen bleiben
+  gültig. Nach `wt.input.set_wiring()` geschieht das von selbst — `InputConfig` meldet
+  die Änderung über den Rückruf `on_wiring_changed`, ein schlichtes Callable ohne
+  Import, sodass die Importrichtung unberührt bleibt. Vorher stand nach jeder
+  Umverdrahtung der Zustand des Verbindungsaufbaus in `wt.device`, und
+  `expand_scope("SIGMA")` traf die Elemente der alten Verdrahtung.
+  `DeviceInfo.read(previous=…)` übernimmt dabei Identität und Optionen, statt `*IDN?`
+  und `*OPT?` erneut zu fragen: sie ändern sich während einer Verbindung nicht, und
+  ein diesmal fehlschlagender Query würde den Steckbrief schlechter machen als er war.
 - Bereichstabellen nach Modultyp auswählen
 - [x] **Optionen und Firmware erfassen — umgesetzt 2026-08-21.** `*OPT?` wird
   beim Verbinden abgefragt und in `DeviceInfo.options` abgelegt; die Firmware

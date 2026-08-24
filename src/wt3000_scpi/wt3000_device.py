@@ -39,7 +39,9 @@
 #         (Befund B-12) und die Modellpruefung beim Verbinden.
 #   M1-4  ensure_protocol_state() - der Sollzustand wird hier geprueft
 #         (check_protocol_state), aber nicht hergestellt.
-#   M1-5  drain_after_failure() wird weiterhin nirgends aufgerufen (B-04).
+#   M1-5  drain_after_failure() wird inzwischen an vier Stellen aufgerufen
+#         (hier zweimal, in write_metadata() und in device_update_rate());
+#         eine allgemeine Zustaendigkeitsregel fehlt weiterhin - Befund S-03.
 # =============================================================================
 
 from __future__ import annotations
@@ -269,8 +271,20 @@ class DeviceInfo:
     # -- Erzeugen -----------------------------------------------------------
 
     @classmethod
-    def read(cls, session: WTSession) -> "DeviceInfo":
+    def read(cls, session: WTSession, previous: "DeviceInfo | None" = None) -> "DeviceInfo":
         """Steckbrief vom Geraet lesen. Reine Queries, veraendert nichts.
+
+        NEU (ROADMAP M1-3): 'previous' ist ein bereits erhobener Steckbrief
+        DERSELBEN Sitzung. Ist er angegeben, werden '*IDN?' und '*OPT?' nicht
+        erneut gefragt, sondern uebernommen - Modell, Seriennummer, Firmware
+        und verbaute Optionen aendern sich waehrend einer Verbindung nicht.
+
+        Das ist nicht nur eine Ersparnis von zwei Abfragen. Ein erneutes
+        '*IDN?', das diesmal fehlschlaegt, wuerde eine bereits bekannte
+        Identitaet gegen 'unbekannt' eintauschen und mit 'options_known=False'
+        die Optionspruefung stillegen - eine Auffrischung wuerde den
+        Steckbrief also schlechter machen als er war. Gebraucht wird
+        'previous' von 'WT3000.refresh_device()' nach einer Umverdrahtung.
 
         Die Fehlerbehandlung ist mit Absicht zweigeteilt:
 
@@ -289,11 +303,14 @@ class DeviceInfo:
         verschoben, ohne dass irgendwo ein Fehler auftraete.
         """
         identity = "unbekannt"
-        try:
-            identity = session.query("*IDN?")
-        except WTError as error:
-            _log.warning("*IDN? fehlgeschlagen: %s - Steckbrief bleibt unvollstaendig", error)
-            session.drain_after_failure()
+        if previous is not None:
+            identity = previous.identity
+        else:
+            try:
+                identity = session.query("*IDN?")
+            except WTError as error:
+                _log.warning("*IDN? fehlgeschlagen: %s - Steckbrief bleibt unvollstaendig", error)
+                session.drain_after_failure()
 
         parts = [p.strip() for p in identity.split(",")]
         while len(parts) < 4:
@@ -307,22 +324,20 @@ class DeviceInfo:
         options_raw = "unbekannt"
         options: frozenset[str] = frozenset()
         options_known = False
-        try:
-            options_raw = session.query("*OPT?")
-            options = parse_options(options_raw)
-            options_known = True
-        except WTError as error:
-            _log.warning(
-                "*OPT? fehlgeschlagen: %s - die verbauten Optionen bleiben "
-                "unbekannt; optionsgebundene Gruppen werden deshalb nicht "
-                "vorab abgewiesen, sondern laufen im Zweifel ins Geraet",
-                error,
-            )
-            session.drain_after_failure()
+        if previous is not None:
+            options_raw = previous.options_raw
+            options = previous.options
+            options_known = previous.options_known
+        else:
+            options_raw, options, options_known = cls._read_options(session)
 
         # Rein lesende Sicht: dieses Objekt benutzt die vorhandenen Parser aus
         # wt3000_input, statt ':INPut:MODUle?' ein viertes Mal selbst zu
         # zerlegen (vgl. Befund B-03).
+        # Bewusst OHNE 'on_wiring_changed': dieses InputConfig liest nur und
+        # ruft deshalb nie zurueck. Andernfalls entstuende eine Schleife -
+        # refresh_device() baut den Steckbrief, der Steckbrief baut ein
+        # InputConfig, das den Steckbrief auffrischen liesse.
         reader = InputConfig(session, allow_changes=False)
 
         wiring = reader.get_wiring()
@@ -357,6 +372,28 @@ class DeviceInfo:
             options=options,
             options_known=options_known,
         )
+
+    @classmethod
+    def _read_options(cls, session: WTSession) -> tuple[str, frozenset[str], bool]:
+        """'*OPT?' abfragen. Rohantwort, Codes und ob es geklappt hat.
+
+        NEU (ROADMAP M1-3): aus 'read()' herausgezogen, seit der Steckbrief
+        auch aufgefrischt werden kann - dort wird dieser Weg uebersprungen.
+        Der Ablauf ist unveraendert: informativ, also protokollieren und
+        nachraeumen statt abbrechen.
+        """
+        try:
+            options_raw = session.query("*OPT?")
+            return options_raw, parse_options(options_raw), True
+        except WTError as error:
+            _log.warning(
+                "*OPT? fehlgeschlagen: %s - die verbauten Optionen bleiben "
+                "unbekannt; optionsgebundene Gruppen werden deshalb nicht "
+                "vorab abgewiesen, sondern laufen im Zweifel ins Geraet",
+                error,
+            )
+            session.drain_after_failure()
+            return "unbekannt", frozenset(), False
 
     # -- Auswerten ----------------------------------------------------------
 
@@ -1053,7 +1090,12 @@ class WT3000:
 
     @property
     def device(self) -> DeviceInfo:
-        """Steckbrief, einmalig beim Verbinden erhoben."""
+        """Steckbrief - beim Verbinden erhoben, ueber refresh_device() aktuell.
+
+        UEBERARBEITET (ROADMAP M1-3): hiess "einmalig beim Verbinden erhoben",
+        und das war woertlich zu nehmen - nach einer Umverdrahtung stand hier
+        weiterhin der Zustand des Verbindungsaufbaus.
+        """
         return self._device
 
     @property
@@ -1068,10 +1110,21 @@ class WT3000:
 
     @property
     def input(self) -> InputConfig:
-        """Eingangs- und Messkonfiguration (':INPut'), fertig verdrahtet."""
+        """Eingangs- und Messkonfiguration (':INPut'), fertig verdrahtet.
+
+        UEBERARBEITET (ROADMAP M1-3, Befund S-01): 'fertig verdrahtet' heisst
+        jetzt auch, dass dieses Objekt dieselbe Elementliste benutzt wie
+        'wt.ranges' - und dass eine Umverdrahtung ueber 'set_wiring()' den
+        Steckbrief auffrischt, statt ihn stillschweigend veralten zu lassen.
+        """
         self._require_open()
         if self._input is None:
-            self._input = InputConfig(self._session, allow_changes=self._allow_changes)
+            self._input = InputConfig(
+                self._session,
+                allow_changes=self._allow_changes,
+                elements=self._device.elements,
+                on_wiring_changed=self._after_wiring_change,
+            )
         return self._input
 
     @property
@@ -1282,6 +1335,78 @@ class WT3000:
             computation=self.computation,
             harmonics=harmonics,
         )
+
+    # -- Gerätesteckbrief auffrischen ---------------------------------------
+    # NEU (ROADMAP M1-3, Befund S-01)
+
+    def refresh_device(self) -> DeviceInfo:
+        """Verdrahtung, Module und Elementliste neu lesen und weitergeben.
+
+        Zu rufen, wenn sich die Verdrahtung geaendert haben kann, ohne dass
+        dieser Treiber es mitbekommen hat - typischerweise nach einem Eingriff
+        am Bedienfeld oder durch eine zweite Sitzung. Nach 'wt.input.set_wiring()'
+        geschieht es von selbst.
+
+        Warum das noetig ist: 'DeviceInfo' traegt die Elementliste UND die
+        Zuordnung der Wiring-Units, und aus ihr sind 'wt.input' und
+        'wt.ranges' verdrahtet. Ohne Auffrischung loeste
+        'wt.ranges.expand_scope("SIGMA")' nach einer Umverdrahtung weiterhin
+        auf die Elemente der alten Verdrahtung auf - fehlerfrei, plausibel und
+        falsch.
+
+        Die Fachobjekte werden AN ORT UND STELLE nachgezogen und nicht
+        ersetzt; wer sich 'wt.ranges' in eine Variable gelegt hat, arbeitet
+        danach mit demselben Objekt und dem neuen Stand.
+
+        Identitaet und Optionen werden aus dem bisherigen Steckbrief
+        uebernommen - sie aendern sich waehrend einer Verbindung nicht (siehe
+        'DeviceInfo.read(previous=...)').
+        """
+        self._require_open()
+        vorher = self._device
+        self._device = DeviceInfo.read(self._session, previous=vorher)
+
+        if self._device.wiring != vorher.wiring:
+            _log.warning(
+                "Verdrahtung geaendert: %s -> %s. Elemente %s -> %s, Units %s -> %s",
+                vorher.wiring,
+                self._device.wiring,
+                vorher.elements,
+                self._device.elements,
+                sorted(vorher.sigma_members),
+                sorted(self._device.sigma_members),
+            )
+
+        # Nur die bereits gebauten Fachobjekte - die uebrigen holen sich den
+        # neuen Stand ohnehin beim ersten Zugriff.
+        if self._ranges is not None:
+            self._ranges.configure_elements(
+                self._device.elements, self._device.sigma_members
+            )
+        if self._input is not None:
+            self._input.configure_elements(self._device.elements)
+
+        return self._device
+
+    def _after_wiring_change(self) -> None:
+        """Rueckruf aus 'InputConfig.set_wiring()'.
+
+        Schlaegt die Auffrischung fehl, ist das KEIN Randfall zum
+        Protokollieren: die Verdrahtung steht dann neu am Geraet, waehrend
+        Steckbrief und Fachobjekte den alten Stand tragen - genau der
+        Zustand, den diese Aenderung beseitigen soll. Er kommt deshalb als
+        Ausnahme heraus, mit dem Hinweis, dass geschrieben wurde.
+        """
+        try:
+            self.refresh_device()
+        except WTError as error:
+            raise WTError(
+                "Die Verdrahtung wurde am Geraet gesetzt und zurueckgelesen, der "
+                f"Gerätesteckbrief liess sich danach aber nicht neu lesen: {error}. "
+                "'wt.device' und 'wt.ranges' tragen jetzt den alten Stand - "
+                "'wt.refresh_device()' wiederholen, bevor Bereiche ueber SIGMA/SIGMB "
+                "oder 'ALL' gesetzt werden."
+            ) from error
 
     def check_protocol_state(self) -> None:
         """Voraussetzungen der Binaerauswertung pruefen. Veraendert nichts.

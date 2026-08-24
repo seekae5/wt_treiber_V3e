@@ -67,7 +67,7 @@ konfigurierten Werkzeuge laufen ohne Argumente und sind **heute vollständig gr�
 ```bash
 ruff check .    # Stil und ungenutzte Namen (E/F/W, Zeilenlänge 100)
 mypy            # Typprüfung über src/, Zielplattform Windows
-pytest          # 670 Fälle, unter einer Sekunde
+pytest          # 682 Fälle, unter einer Sekunde
 ```
 
 Die Einstellungen stehen in [pyproject.toml](pyproject.toml), jeweils mit Begründung —
@@ -205,6 +205,14 @@ with wt.applied_ranges(plan, backup_file=Path("konfiguration/backup.json")) as r
 
 Für die Item-Tabelle heißt dasselbe `wt.items.applied(specs)`.
 
+**Der Gerätesteckbrief altert nicht mit.** Verdrahtung, Bestückung und die Zuordnung
+der Wiring-Units werden beim Verbinden gelesen und von `wt.input` und `wt.ranges`
+benutzt. Ändert `wt.input.set_wiring()` die Verdrahtung, frischt die Fassade den
+Steckbrief selbsttätig auf; wurde am Bedienfeld eingegriffen, tut es
+`wt.refresh_device()`. Ohne das löste `wt.ranges.expand_scope("SIGMA")` nach einer
+Umverdrahtung weiterhin auf die Elemente der alten Verdrahtung auf — fehlerfrei,
+plausibel und falsch.
+
 Misslingt die Wiederherstellung, kommt das als Ausnahme heraus und nicht nur ins
 Protokoll. Ein Block, den man ohne Fehler verlässt, hat den Ausgangszustand also
 tatsächlich zurückgestellt — geprüft wird das nach dem Zurückschreiben durch eine
@@ -228,7 +236,8 @@ Layer 2   wt3000_numeric     ':NUMeric', Item-Tabelle, FLOat-Blockparser
           wt3000_deviceconfig  ':INTEGrate', ':MEASure', ':HARMonics'
 Layer 3   wt3000_itemspec    Ablauf um die Item-Tabelle
           wt3000_ranging     Ablauf um die Messbereiche
-          wt3000_measure     Messschleife und CSV
+          wt3000_measure     Messschleife, Sample, SampleSink
+          wt3000_sinks       CsvSink, JsonlSink, CallbackSink, MultiSink
           wt3000_backup      SessionBackup — Sichern und Wiederherstellen
 Layer 4   wt3000_device      Fassade WT3000  ← der Einstiegspunkt
           stage2..stage5b    ausführbare Stufenskripte
@@ -271,7 +280,7 @@ Für PyCharm liegen fertige Startkonfigurationen unter [.run/](.run).
 ## Tests
 
 ```bash
-pytest                                  # 670 Tests, unter einer Sekunde
+pytest                                  # 682 Tests, unter einer Sekunde
 pytest tests/test_device_facade.py -v   # nur die Fassade
 ```
 
@@ -289,7 +298,7 @@ Nur-Lesen-Sperre und die vollständige Wiederherstellung nach einem Abbruch.
 | [ROADMAP.md](docs/ROADMAP.md) | Zielbild, Meilensteine M0–M5, Zielarchitektur, Abhängigkeiten |
 | [AENDERUNGEN_2026-08-18.md](docs/AENDERUNGEN_2026-08-18.md) | Fehlerprüfung: Änderungen F-01…F-09, offene Befunde B-01…B-15 |
 | [AENDERUNGEN_2026-08-19_M1-1.md](docs/AENDERUNGEN_2026-08-19_M1-1.md) | Fassade `WT3000`: Umsetzung, Erkenntnisse, was bewusst offen blieb |
-| [WT3000_Commands_Overview.md](docs/WT3000_Commands_Overview.md) | Kurzübersicht der SCPI-Kommandogruppen des Geräts |
+| [WT3000_Communication_Commands.md](docs/WT3000_Communication_Commands.md) | Kommandoreferenz des Geräts (Auszug aus IM WT3001E-17EN) |
 
 Referenz für alles Gerätebezogene ist das Handbuch **IM WT3001E-17EN**. Jede
 SCPI-Eigenheit im Quelltext nennt die Fundstelle oder ist als offene Frage markiert.
@@ -300,13 +309,14 @@ SCPI-Eigenheit im Quelltext nennt die Fundstelle oder ist als offene Frage marki
 
 * **Windows-gebunden** am Gerät — `TmctlTransport` braucht `ctypes.WinDLL`. Ein
   plattformunabhängiger Socket-Transport ist vorgesehen, aber nicht gebaut.
-* **`WTConfig.dll_path`** zeigt in der Voreinstellung auf einen Pfad des
-  Entwicklungsrechners. Über `WT3000.connect(dll_path=...)` überschreibbar (Befund B-08).
-* **Zwei Schreibwege auf dieselben Bereichsknoten** mit unterschiedlicher
-  Parametersyntax — `wt3000_rangeio` sendet `1000`, `wt3000_input` sendet `1000V`.
-  Höchstens eine Form kann richtig sein; zu klären am Gerät (Befund B-01, ROADMAP M0-1).
+* **Zwei Schreibwege auf dieselben Bereichsknoten.** Beide senden inzwischen dieselbe
+  Form (`format_nrf`, also `1000` ohne Einheit) — am Gerät belegt ist allerdings nur der
+  **Spannungsknoten**. Für Direktstrom und Sensorstrom steht die Gegenprobe aus
+  (ROADMAP M0-1).
 * **Die Messschleife blockiert** und bricht nur über Strg+C oder ein gesetztes Limit ab
   (ROADMAP M3-1).
-* **Vier Elemente und 30-A-Module** stecken an einigen Stellen noch als Konstante im
-  Code. Die Fassade liest die Bestückung inzwischen, gibt sie aber erst an `RangeAccess`
-  weiter, nicht an `InputConfig` (ROADMAP M1-3, Befund B-12).
+* **Bereichstabellen sind noch nicht modulabhängig.** Die Bestückung wird gelesen und
+  seit dem 25.08.2026 an `RangeAccess` *und* `InputConfig` weitergegeben; die Tabellen
+  der zulässigen Bereiche hängen dagegen weiterhin an festen Schlüsseln
+  `(Modultyp, Crest)` — ein unbekanntes Modul ergibt dort einen `KeyError`
+  (ROADMAP M1-3, Befund S-01).

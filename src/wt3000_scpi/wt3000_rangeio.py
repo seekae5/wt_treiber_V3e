@@ -208,6 +208,35 @@ class RangeAccess:
         """Vorhandene Elementnummern."""
         return self._elements
 
+    def configure_elements(
+        self,
+        elements: tuple[int, ...],
+        sigma_members: dict[str, tuple[int, ...]] | None = None,
+    ) -> None:
+        """Elementliste und Wiring-Units ersetzen - nach einer Umverdrahtung.
+
+        NEU (ROADMAP M1-3, Befund S-01). Beides gehoert zusammen und wird
+        deshalb zusammen gesetzt: eine neue Verdrahtung aendert, welche
+        Elemente es gibt UND welche Unit sie traegt. Getrennt zu setzen hiesse,
+        dass es dazwischen einen Zustand gibt, in dem das eine schon neu und
+        das andere noch alt ist - und genau in diesem Zustand loest
+        'expand_scope()' falsch auf.
+
+        Aenderung AM OBJEKT, nicht Austausch: 'wt.ranges' gibt eine Referenz
+        heraus, die ein Anwender halten darf. Zur Begruendung siehe
+        'InputConfig.configure_elements()'.
+        """
+        self._elements = tuple(elements)
+        self._sigma_members = {
+            canonical_scope(name): tuple(members)
+            for name, members in (sigma_members or {}).items()
+        }
+        _log.debug(
+            "RangeAccess: Elemente jetzt %s, Units %s",
+            self._elements,
+            sorted(self._sigma_members),
+        )
+
     @property
     def allow_changes(self) -> bool:
         """True, wenn dieses Objekt schreiben darf."""
