@@ -77,6 +77,10 @@ from .wt3000_core import (
 # weil jede kuenftige optionsgebundene Gruppe (Analyse Rang 3, 5, 8, 10)
 # dagegen prueft - die Tabelle gehoert damit zur oeffentlichen Oberflaeche
 # und nicht in ein Modul, das man erst finden muss.
+# NEU (M2-4): der Sitzungs-Sicherungspunkt. Er steht neben der Fassade, weil
+# 'wt.backup()' und 'wt.restore_backup()' der uebliche Weg zu ihm sind - wer
+# ihn von Hand baut, importiert aus wt3000_backup.
+from .wt3000_backup import BACKUP_VERSION, SessionBackup
 from .wt3000_device import (
     OPTION_REQUIREMENTS,
     DeviceInfo,
@@ -166,6 +170,9 @@ __all__ = [
     "MeasMode",
     "ValueStatus",
     "NumericValue",
+    # Sicherungspunkt (M2-4)
+    "SessionBackup",
+    "BACKUP_VERSION",
     # Rechenfunktionen (M2-1)
     "ComputationConfig",
     "ComputationSettings",
@@ -218,6 +225,8 @@ MODULES: tuple[str, ...] = (
     # NEU (M2-1/M3-2): ':INTEGrate' und die weiteren Gruppen aus M2-1.
     "wt3000_deviceconfig",
     "wt3000_itemspec",
+    # NEU (M2-4): buendelt die Fachmodule zu einem Sicherungspunkt.
+    "wt3000_backup",
     "wt3000_ranging",
     "wt3000_measure",
     # NEU (M4-2): die Ausgabeformate - Fachmodul neben wt3000_measure.

@@ -315,7 +315,11 @@ gliedert.
 * **Gemeinsamer Gerätesnapshot** (ROADMAP M2-4, `SessionBackup`) — sollte,
   sobald 2.2/2.3/2.5 existieren, auch Averaging-, Harmonics- und
   Motor-Konfiguration mit sichern/wiederherstellen, nicht nur `:INPut` und
-  Item-Tabelle
+  Item-Tabelle.
+  **Erledigt am 21.08.2026** für Averaging und Harmonics (2.2/2.3);
+  Motor (2.5) fehlt noch, weil die Gruppe selbst noch nicht existiert —
+  `SessionBackup` bekommt dafür ein Feld, sobald es sie gibt. Details in
+  Abschnitt 10.
 * **Panel-Sperre während automatisierter Läufe** — neue, bisher nirgends
   geplante Ergänzung: `COMMunicate:LOCKout` (`LLO`) oder
   `SYSTem:KLOCk`/`:SLOCk` als eigene Methode, z. B. `wt.device.lock_panel()` /
@@ -340,7 +344,7 @@ gliedert.
 | 3 | `HarmonicsConfig` (`:HARMonics`) | **`/G5` oder `/G6`** | Einer der Hauptanwendungsfälle des WT3000 — aber erst nach `*OPT?`-Check angehen | **umgesetzt 2026-08-21** — siehe Abschnitt 9 |
 | 4 | Steuerbares Mess-Objekt + Trigger (`*TRG`/`GET`, `STATus:CONDition?`-Polling auf UPD-Bit) | **nein** | Grundlage für 2.1, 2.6 und robuste Automatisierung; Ereignismechanismus jetzt am Handbuch belegt (Abschnitt 0.2), nicht mehr nur Vermutung | UPD-Polling **widerlegt** (0 Treffer in 3556 Proben) — Weg über EESE/SRQ oder Dublettenerkennung nötig |
 | 5 | `:CBCycle` (zyklus-/ereignisgetriggerte Messung) | **`/CC`** | Für synchrone/getriggerte Anwendungsfälle jenseits der freilaufenden Schleife | **freigegeben** — `CC` ist verbaut, Werksconfig braucht keine externe Verkabelung |
-| 6 | Erweiterter `SessionBackup` (inkl. Averaging/Harmonics/Motor) | folgt den Gruppen, die er sichert | Sicherheitsnetz, sobald 2–3 neue schreibbare Gruppen existieren | unverändert |
+| 6 | Erweiterter `SessionBackup` (inkl. Averaging/Harmonics/Motor) | folgt den Gruppen, die er sichert | Sicherheitsnetz, sobald 2–3 neue schreibbare Gruppen existieren | **umgesetzt 2026-08-21** — siehe Abschnitt 10 |
 | 7 | Panel-Sperre (`COMMunicate:LOCKout` und/oder `SYSTem:KLOCk`) | **nein** | Kleiner Aufwand, spürbarer Schutz bei unbeaufsichtigten Läufen; beide Kommandos jetzt im Detail bekannt (Abschnitt 3) | alle drei Wege ansprechbar, aktuell aus; Verhalten bei Verbindungsabbruch **vorerst zurückgestellt** |
 | 8 | `:MOTor` (Motor-Wirkungsgrad) | **Modellvariante `-MV`**, keine Nachrüstoption | Nur falls das konkrete Gerät die MV-Variante ist — per `*IDN?` (Modellcode) klärbar, nicht per `*OPT?` | **freigegeben** — `:MOTor:PM?` antwortet (`1.0000;"W"`); Modellcode war der zuverlässige Indikator, `*OPT?`s `MTR` nicht |
 | 9 | `:STORe`/`:FILE` (geräteseitige Datenverwaltung) | **nein** | Ergänzung, kein Ersatz für die vorhandene Python-Messschleife; `STORe:SMODe INTEGrate` koppelt Speicherung direkt an Integrationszyklen | unverändert |
@@ -664,3 +668,89 @@ Wie bei Rang 1 und 2 die **Geräteabnahme** (M0-3). Nicht enthalten sind die
 optionsabhängigen Nachbargruppen `:CBCycle` (Rang 5, `/CC` verbaut) und
 `:MOTor` (Rang 8, Modellvariante vorhanden) — beide sind freigegeben und
 können demselben Muster folgen.
+---
+
+## 10 — Umgesetzt: Rang 6, Sitzungs-Sicherungspunkt (2026-08-21)
+
+Die Eintrittsbedingung dieses Rangs war „sobald 2–3 neue schreibbare Gruppen
+existieren". Mit `:INTEGrate`, `:MEASure` und `:HARMonics` sind es genau drei —
+und keine davon war in irgendeinem der bestehenden Backups enthalten.
+
+### Was vorher fehlte
+
+Sicherbar war schon einiges, nur eben einzeln: `RangeBackup` für die Bereiche,
+`InputSnapshot` für die Eingangskonfiguration, `save_backup_bundle()` für die
+Item-Tabelle. Drei Dateien, drei Aufrufe, drei Gelegenheiten, eine davon zu
+vergessen — und die drei neuen Gruppen in keiner davon.
+
+`SessionBackup` in [`wt3000_backup.py`](../src/wt3000_scpi/wt3000_backup.py)
+bündelt sie zu einer versionierten JSON-Datei. Über die Fassade:
+
+```python
+with WT3000.connect(read_only=False, allow_changes=True) as wt:
+    wt.backup(Path("konfiguration/vorher.json"))
+    ...                                    # Messung, Umbau, was auch immer
+    probleme = wt.restore_backup(Path("konfiguration/vorher.json"))
+```
+
+`restore_backup()` gibt zurück, was **nach** dem Wiederherstellen noch abweicht —
+leere Liste heißt, das Gerät steht wieder wie im Backup.
+
+### Das Modul schreibt keinen einzigen Parser
+
+Das ist der Kern und der Grund, warum M2-4 nach M2-1 leicht wurde: jeder
+Baustein bringt Erfassung, Serialisierung und Rückweg längst selbst mit.
+Hinzugekommen sind nur `to_dict()`/`from_dict()` für die drei neuen
+`Settings`-Datensätze. `SessionBackup` legt die **Reihenfolge** fest und prüft
+den Endzustand — mehr nicht.
+
+### Die Reihenfolge, und warum sie so ist
+
+1. **Eingangskonfiguration** — darin zuerst Crest-Faktor und Verdrahtung, dann
+   Bereiche, Filter, Skalierung, Sync, Modus, Rate. Die Verdrahtung bestimmt,
+   welches Element zu welcher Wiring-Unit gehört.
+2. **Rechenfunktionen und Oberschwingungen** — ihre Parameter verweisen auf
+   Elemente (`P1`, `U3`) und Wiring-Units (`SIGMA`). Vor Schritt 1 gesetzt,
+   könnten sie auf eine Verdrahtung zeigen, die es gleich nicht mehr gibt.
+3. **Integration.**
+4. **Item-Tabelle zuletzt** — sie sagt, *was* gemessen wird, und verweist auf
+   Elemente und Ordnungen, die vorher existieren müssen.
+
+### Eine Überschneidung, die zur Kontrolle wurde
+
+`InputSnapshot` enthält die Messbereiche **bereits** — `restore_input_snapshot()`
+schreibt sie mit. `RangeBackup` sichert denselben Zustand über einen anderen
+Codepfad noch einmal. Beides zu sichern ist Absicht, beides zurückzuschreiben
+wäre ein Fehler: bei einem Zwischenfehler bliebe unklar, welcher Pfad den
+Zustand zuletzt angefasst hat.
+
+Deshalb gilt: wiederhergestellt wird **ausschließlich** über den Input-Snapshot,
+der Bereichsteil dient als unabhängiger Zweitbeleg und wird bei der Endkontrolle
+gegengelesen. Aus der Redundanz wird eine Kontrolle statt einer Stolperfalle.
+
+### Zwei Sicherungen, die ein Backup braucht
+
+- **Identitätsprüfung.** Ein Backup von Gerät A auf Gerät B zu schreiben ist der
+  teuerste Einzelfehler, den das Modul zulassen könnte. Verglichen werden Modell
+  und Seriennummer; ein Firmware-Update macht ein Backup dagegen nicht ungültig.
+  Überstimmbar mit `force=True`, was protokolliert wird.
+- **Formatversion** in der Datei, geprüft beim Laden — eine fremde Version fällt
+  sonst erst mitten im Wiederherstellen auf, also genau dann, wenn das Gerät
+  schon halb verstellt ist.
+
+### Was nicht gesichert wird
+
+Der Integrationszähler (die aufgelaufenen Wh/Ah) und alle Messwerte: das sind
+Messergebnisse, kein Gerätezustand. `IntegrationSettings.state` steht in der
+Datei, wird aber nicht zurückgeschrieben — ob das Gerät läuft, ist kein
+Einstellwert.
+
+`:HARMonics` wird nur mitgesichert, wenn die Option verbaut ist; ohne sie
+antwortet die Gruppe gar nicht, und ein Timeout mitten in der Sicherung wäre das
+Gegenteil eines Sicherheitsnetzes.
+
+### Offen
+
+`:MOTor` (Rang 8) fehlt im Backup, weil die Gruppe selbst noch nicht existiert —
+sie bekommt ein Feld, sobald sie gebaut ist. Und wie überall: **die
+Geräteabnahme steht aus** (M0-3).

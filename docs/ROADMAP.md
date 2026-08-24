@@ -45,7 +45,7 @@ steuerbaren Langzeitmessung.
 |---|---|---|
 | M0 — Gerätefragen | **teilweise** | ein protokollierter Gerätetermin; Spannungssyntax ist bereits belegt |
 | M1 — Fundament | **teilweise** | M1-3 bis M1-5 |
-| M2 — Konfiguration | **teilweise** | M2-1 zur Hälfte (`:INTEGrate`, `:MEASure`, `:HARMonics`); Parser vereinheitlichen, dann M2-4 |
+| M2 — Konfiguration | **teilweise** | M2-1 zur Hälfte und M2-4 umgesetzt; offen: M2-2, M2-3, M2-5 |
 | M3 — Messsteuerung | **teilweise** | M3-2 Integration umgesetzt; Sitzungsbesitz entscheiden, danach M3-1 |
 | M4 — Export | **teilweise** | M4-3 Einheiten und Metadaten |
 | M5 — Auslieferung | **teilweise** | CLI, Paketmetadaten und CI |
@@ -234,12 +234,26 @@ nicht als Ersatz für die gezielte Wiederherstellung.
 - `InputPlan` als deklarativen Sollzustand für die gesamte Eingangskonfiguration
 - Semantik von `InputConfig.unlocked()` vorher entscheiden
 
-### M2-4 — Ein gemeinsames Backup `M`
+### M2-4 — Ein gemeinsames Backup `M` — **umgesetzt 2026-08-21**
 
-`SessionBackup` bündelt Gerätesteckbrief, Gerätekonfiguration, Input-Snapshot,
-Bereiche, Item-Tabelle und Tail in einer versionierten JSON-Datei. Ein eigenständiger
-Restore-Befehl lädt, stellt in dokumentierter Reihenfolge wieder her und prüft den
-Endzustand.
+- [x] `SessionBackup` in [wt3000_backup.py](../src/wt3000_scpi/wt3000_backup.py)
+  bündelt Gerätesteckbrief, Input-Snapshot, Bereiche, Item-Tabelle samt Tail
+  **und die drei schreibbaren Gerätegruppen** (`:INTEGrate`, `:MEASure`,
+  `:HARMonics`) in einer versionierten JSON-Datei
+- [x] `wt.backup(pfad)` sichert, `wt.restore_backup(pfad)` lädt, stellt in
+  dokumentierter Reihenfolge wieder her und **prüft den Endzustand** — die
+  verbleibenden Abweichungen sind der Rückgabewert
+- [x] Identitätsprüfung: ein Backup von Gerät A wird nicht ohne `force=True` auf
+  Gerät B geschrieben
+- [x] Formatversion in der Datei, geprüft beim Laden
+
+Das Modul schreibt **keinen einzigen Parser und kein einziges Kommando** — jeder
+Baustein bringt Erfassung, Serialisierung und Rückweg selbst mit; `SessionBackup`
+legt nur die Reihenfolge fest und kontrolliert das Ergebnis.
+
+**Fertig, wenn:** erfüllt — Sichern, Verstellen, Zurückschreiben und Prüfen sind
+als Zyklus gerätefrei durchgespielt. Wie bei M2-1 und M3-2 steht die
+Geräteabnahme aus (M0-3).
 
 ### M2-5 — Doppelte Regeln zusammenführen `M`
 
@@ -403,12 +417,12 @@ Fachzugriffe     wt3000_numeric, wt3000_rangeio, wt3000_input
                                         ':MEASure', ':HARMonics')
 
 Abläufe          wt3000_itemspec, wt3000_ranging, wt3000_measure
+                 wt3000_backup         (M2-4, seit 2026-08-21)
 Ausgabe          wt3000_sinks
 
 Fassade          wt3000_device
 
-Geplant          wt3000_backup         (M2-4)
-                 cli.py                (M5-2)
+Geplant          cli.py                (M5-2)
 ```
 
 `SampleSink` bleibt neben `Sample` in `wt3000_measure.py`; die konkreten Senken

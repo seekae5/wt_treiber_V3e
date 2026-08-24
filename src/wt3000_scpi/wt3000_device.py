@@ -57,9 +57,11 @@ from .wt3000_common import (
     parse_condition,
     strip_response_header,
 )
+from .wt3000_backup import SessionBackup, device_fingerprint
 from .wt3000_core import TmctlTransport, Transport, WTConfig, WTError, WTSession
 # NEU (M3-2/M2-1): die Geraetegruppen jenseits von ':INPut' und ':NUMeric'.
 from .wt3000_deviceconfig import ComputationConfig, HarmonicsConfig, IntegrationConfig
+from .wt3000_input import ALL_GROUPS as ALL_INPUT_GROUPS
 from .wt3000_input import InputConfig, WiringUnit
 from .wt3000_itemspec import (
     ItemSpec,
@@ -88,6 +90,7 @@ from .wt3000_ranging import RangeBackup, RangePlan, RangeReport, applied_ranges
 
 __all__ = [
     "OPTION_REQUIREMENTS",
+    "SessionBackup",
     "DeviceInfo",
     "ItemAccess",
     "MeasureControl",
@@ -96,6 +99,15 @@ __all__ = [
 ]
 
 _log = logging.getLogger("wt3000.device")
+
+#: Die Gruppen von 'InputConfig', die 'WT3000.restore_backup()' freigibt.
+#
+# Alle - und das ist Absicht: ein Backup schreibt ausschliesslich Werte
+# zurueck, die vorher von diesem Geraet gelesen wurden. Eine Gruppe hier
+# auszulassen hiesse, ein Backup wiederherzustellen, das nachweislich
+# unvollstaendig bleibt; die Endkontrolle meldete die Abweichung dann als
+# Fehler, obwohl der Treiber sie selbst verursacht hat.
+INPUT_GROUPS: tuple[str, ...] = tuple(sorted(ALL_INPUT_GROUPS))
 
 
 # ---------------------------------------------------------------------------
@@ -1157,6 +1169,101 @@ class WT3000:
         return self._measure
 
     # -- Ablaeufe -----------------------------------------------------------
+
+    def backup(self, path: Path | None = None) -> SessionBackup:
+        """Den ganzen Sitzungszustand sichern (M2-4).
+
+        Erfasst wird alles, was diese Fassade erreichen kann: Steckbrief,
+        Eingangskonfiguration, Messbereiche, Item-Tabelle samt Tail und die
+        drei schreibbaren Gerätegruppen. Reine Queries - der Aufruf veraendert
+        nichts und funktioniert auch in einer Nur-Lesen-Sitzung.
+
+        ':HARMonics' wird nur mitgesichert, wenn die Option verbaut ist; ohne
+        sie antwortet die Gruppe gar nicht, und ein Timeout mitten in der
+        Sicherung waere das Gegenteil eines Sicherheitsnetzes.
+
+        'path' angegeben -> das Backup wird zusaetzlich als JSON abgelegt.
+        """
+        self._require_open()
+        harmonics = self.harmonics if self._device.supports(":HARMonics") else None
+        if harmonics is None:
+            _log.info(
+                "':HARMonics' wird nicht mitgesichert - Option fehlt (%s)",
+                self._device.options_summary(),
+            )
+
+        backup = SessionBackup.capture(
+            device=device_fingerprint(
+                identity=self._device.identity,
+                manufacturer=self._device.manufacturer,
+                model=self._device.model,
+                serial=self._device.serial,
+                firmware=self._device.firmware,
+                options=tuple(sorted(self._device.options)),
+                elements=self._device.elements,
+                wiring=self._device.wiring,
+            ),
+            input_config=self.input,
+            range_access=self.ranges,
+            session=self._session,
+            integration=self.integration,
+            computation=self.computation,
+            harmonics=harmonics,
+        )
+        if path is not None:
+            backup.save(path)
+        return backup
+
+    def restore_backup(self, backup: SessionBackup | Path, force: bool = False) -> list[str]:
+        """Einen gesicherten Zustand zurueckschreiben und pruefen (M2-4).
+
+        Rueckgabe: die Abweichungen, die NACH dem Wiederherstellen noch
+        bestehen - leere Liste heisst, das Geraet steht wieder wie im Backup.
+        Die Liste wird zurueckgegeben und nicht geworfen: welche Abweichung
+        hinnehmbar ist, entscheidet der Aufrufer. Protokolliert werden sie in
+        jedem Fall.
+
+        Verlangt 'allow_changes=True' - es werden Set-Kommandos gesendet. Die
+        Gruppensperre von 'InputConfig' wird dafuer fuer die Dauer des
+        Vorgangs geoeffnet: ein Backup zurueckzuschreiben ist genau der Fall,
+        fuer den 'unlocked()' gebaut ist, und es schreibt ausschliesslich
+        Werte, die vorher von diesem Geraet gelesen wurden.
+        """
+        self._require_open()
+        if not self._allow_changes:
+            raise WTError(
+                "restore_backup() verlangt allow_changes=True - es werden "
+                "Set-Kommandos gesendet."
+            )
+
+        geladen = backup if isinstance(backup, SessionBackup) else SessionBackup.load(backup)
+        geladen.log_summary()
+
+        harmonics = self.harmonics if self._device.supports(":HARMonics") else None
+        aktuell = device_fingerprint(
+            model=self._device.model, serial=self._device.serial
+        )
+
+        with self.input.unlocked(*INPUT_GROUPS):
+            geladen.restore(
+                input_config=self.input,
+                range_access=self.ranges,
+                session=self._session,
+                integration=self.integration,
+                computation=self.computation,
+                harmonics=harmonics,
+                device=aktuell,
+                force=force,
+            )
+
+        return geladen.verify(
+            input_config=self.input,
+            range_access=self.ranges,
+            session=self._session,
+            integration=self.integration,
+            computation=self.computation,
+            harmonics=harmonics,
+        )
 
     def check_protocol_state(self) -> None:
         """Voraussetzungen der Binaerauswertung pruefen. Veraendert nichts.

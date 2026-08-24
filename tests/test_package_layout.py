@@ -61,6 +61,25 @@ LAYERS: dict[str, set[str]] = {
     # konkretes Format. Stuende hier ein Eintrag, waere die Entkopplung
     # wieder dahin.
     "wt3000_sinks": {"wt3000_core", "wt3000_numeric", "wt3000_measure"},
+    # NEU (M2-4): der Sitzungs-Sicherungspunkt. Er steht auf Layer 3 und darf
+    # deshalb aus den Fachmodulen darunter importieren - auch aus den beiden
+    # Geschwistern 'wt3000_itemspec' und 'wt3000_ranging', genau wie
+    # 'wt3000_measure' es mit 'wt3000_itemspec' tut.
+    #
+    # Bewusst NICHT enthalten: 'wt3000_device'. Der Steckbrief ('DeviceInfo')
+    # ist Layer 4, und ein Backup, das ihn importierte, zoege die ganze Fassade
+    # in Layer 3 hinein. Deshalb fuehrt 'SessionBackup.device' eine schlichte
+    # Abbildung, die die Fassade ueber 'device_fingerprint()' fuellt.
+    "wt3000_backup": {
+        "wt3000_core",
+        "wt3000_common",
+        "wt3000_numeric",
+        "wt3000_rangeio",
+        "wt3000_input",
+        "wt3000_deviceconfig",
+        "wt3000_itemspec",
+        "wt3000_ranging",
+    },
     # NEU (ROADMAP M1-1): die Fassade ist Layer 4 und darf deshalb aus allen
     # Schichten darunter importieren - aber aus keinem Stufenskript und aus
     # keinem zweiten Layer-4-Modul. Genau das haelt dieser Eintrag fest: die
@@ -89,6 +108,8 @@ LAYERS: dict[str, set[str]] = {
         "wt3000_ranging",
         "wt3000_measure",
         "wt3000_sinks",
+        # UEBERARBEITET (M2-4): die Fassade buendelt den Sicherungspunkt.
+        "wt3000_backup",
     },
     # NEU (Schritt 0a aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-11): die fuenf
     # Stufenskripte. Sie fehlten hier, seit es sie gibt - 'LAYERS' fuehrte 11

@@ -311,6 +311,16 @@ def parse_mode(response: str) -> IntegrationMode:
 # ---------------------------------------------------------------------------
 
 
+def _optional_datetime(text: str | None) -> datetime | None:
+    """ISO-Zeichenkette oder None in einen Zeitpunkt wandeln."""
+    if text is None:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise WTError(f"Zeitangabe {text!r} im Backup ist nicht lesbar: {exc}") from exc
+
+
 @dataclass(frozen=True)
 class IntegrationSettings:
     """Alles, was ':INTEGrate' ueber sich preisgibt - in einem Datensatz.
@@ -328,6 +338,39 @@ class IntegrationSettings:
     state: IntegrationState
     real_time_start: datetime | None = None
     real_time_end: datetime | None = None
+
+    # -- Serialisieren (M2-4) ----------------------------------------------
+    #
+    # Enums gehen als ihr Wert in die Datei ('NORMal', 'RESET'), Zeitpunkte als
+    # ISO-Zeichenkette. Beides ist im JSON lesbar - ein Backup, das man nicht
+    # mit dem Auge pruefen kann, ist im Fehlerfall wertlos.
+
+    def to_dict(self) -> dict:
+        """Serialisierbare Darstellung fuer das Sitzungs-Backup."""
+        return {
+            "mode": self.mode.value,
+            "timer_seconds": self.timer_seconds,
+            "auto_calibration": self.auto_calibration,
+            "state": self.state.value,
+            "real_time_start": (
+                None if self.real_time_start is None else self.real_time_start.isoformat()
+            ),
+            "real_time_end": (
+                None if self.real_time_end is None else self.real_time_end.isoformat()
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "IntegrationSettings":
+        """Gegenstueck zu to_dict()."""
+        return cls(
+            mode=IntegrationMode(data["mode"]),
+            timer_seconds=int(data["timer_seconds"]),
+            auto_calibration=bool(data["auto_calibration"]),
+            state=IntegrationState(data["state"]),
+            real_time_start=_optional_datetime(data.get("real_time_start")),
+            real_time_end=_optional_datetime(data.get("real_time_end")),
+        )
 
     def describe(self) -> list[str]:
         """Als Zeilenliste fuer Protokoll und Konsole."""
@@ -925,6 +968,19 @@ class AveragingSettings:
     type: AveragingType
     count: int
 
+    def to_dict(self) -> dict:
+        """Serialisierbare Darstellung."""
+        return {"enabled": self.enabled, "type": self.type.value, "count": self.count}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AveragingSettings":
+        """Gegenstueck zu to_dict()."""
+        return cls(
+            enabled=bool(data["enabled"]),
+            type=AveragingType(data["type"]),
+            count=int(data["count"]),
+        )
+
     def describe(self) -> str:
         """Eine Zeile, die auch im ausgeschalteten Fall etwas aussagt."""
         if not self.enabled:
@@ -975,6 +1031,15 @@ class EfficiencyEquation:
         zaehler = self.numerator if self.numerator is not None else "1"
         return f"{zaehler} / {self.denominator}"
 
+    def to_dict(self) -> dict:
+        """Serialisierbare Darstellung."""
+        return {"numerator": self.numerator, "denominator": self.denominator}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "EfficiencyEquation":
+        """Gegenstueck zu to_dict()."""
+        return cls(numerator=data.get("numerator"), denominator=data.get("denominator"))
+
 
 @dataclass(frozen=True)
 class ComputationSettings:
@@ -985,6 +1050,29 @@ class ComputationSettings:
     efficiency: tuple[EfficiencyEquation, ...]
     sq_formula: SQFormula
     sync_mode: SyncMode
+
+    def to_dict(self) -> dict:
+        """Serialisierbare Darstellung fuer das Sitzungs-Backup."""
+        return {
+            "averaging": self.averaging.to_dict(),
+            "frequency_items": list(self.frequency_items),
+            "efficiency": [eq.to_dict() for eq in self.efficiency],
+            "sq_formula": self.sq_formula.value,
+            "sync_mode": self.sync_mode.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ComputationSettings":
+        """Gegenstueck zu to_dict()."""
+        return cls(
+            averaging=AveragingSettings.from_dict(data["averaging"]),
+            frequency_items=tuple(data["frequency_items"]),
+            efficiency=tuple(
+                EfficiencyEquation.from_dict(d) for d in data["efficiency"]
+            ),
+            sq_formula=SQFormula(data["sq_formula"]),
+            sync_mode=SyncMode(data["sync_mode"]),
+        )
 
     def describe(self) -> list[str]:
         """Als Zeilenliste fuer Protokoll und Konsole."""
@@ -1563,6 +1651,35 @@ class HarmonicsSettings:
     iec_object: str
     iec_voltage_grouping: IecGrouping
     iec_current_grouping: IecGrouping
+
+    def to_dict(self) -> dict:
+        """Serialisierbare Darstellung fuer das Sitzungs-Backup."""
+        return {
+            "band": self.band.value,
+            "order_min": self.order_min,
+            "order_max": self.order_max,
+            "pll_source": self.pll_source,
+            "pll_warning": self.pll_warning,
+            "thd": self.thd.value,
+            "iec_object": self.iec_object,
+            "iec_voltage_grouping": self.iec_voltage_grouping.value,
+            "iec_current_grouping": self.iec_current_grouping.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "HarmonicsSettings":
+        """Gegenstueck zu to_dict()."""
+        return cls(
+            band=FrequencyBand(data["band"]),
+            order_min=int(data["order_min"]),
+            order_max=int(data["order_max"]),
+            pll_source=str(data["pll_source"]),
+            pll_warning=bool(data["pll_warning"]),
+            thd=ThdFormula(data["thd"]),
+            iec_object=str(data["iec_object"]),
+            iec_voltage_grouping=IecGrouping(data["iec_voltage_grouping"]),
+            iec_current_grouping=IecGrouping(data["iec_current_grouping"]),
+        )
 
     def describe(self) -> list[str]:
         """Als Zeilenliste fuer Protokoll und Konsole."""

@@ -229,6 +229,7 @@ Layer 2   wt3000_numeric     ':NUMeric', Item-Tabelle, FLOat-Blockparser
 Layer 3   wt3000_itemspec    Ablauf um die Item-Tabelle
           wt3000_ranging     Ablauf um die Messbereiche
           wt3000_measure     Messschleife und CSV
+          wt3000_backup      SessionBackup — Sichern und Wiederherstellen
 Layer 4   wt3000_device      Fassade WT3000  ← der Einstiegspunkt
           stage2..stage5b    ausführbare Stufenskripte
 ```

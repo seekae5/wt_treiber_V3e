@@ -396,6 +396,60 @@ mypy:   Success: no issues found in 18 source files
 
 ---
 
+## 2026-08-21 — Sitzungs-Sicherungspunkt (M2-4)
+
+### Drei Backups waren zwei zu wenig
+
+Sicherbar war schon einiges, nur einzeln: `RangeBackup`, `InputSnapshot`,
+`save_backup_bundle()`. Drei Dateien, drei Aufrufe — und die drei neuen
+schreibbaren Gruppen (`:INTEGrate`, `:MEASure`, `:HARMonics`) in keiner davon.
+Neu ist `SessionBackup` in
+[wt3000_backup.py](../src/wt3000_scpi/wt3000_backup.py), erreichbar über
+`wt.backup(pfad)` und `wt.restore_backup(pfad)`.
+
+`restore_backup()` gibt zurück, was **nach** dem Wiederherstellen noch abweicht;
+leere Liste heißt, das Gerät steht wieder wie im Backup.
+
+### Kein neuer Parser, kein neues Kommando
+
+Jeder Baustein bringt Erfassung, Serialisierung und Rückweg längst selbst mit.
+Hinzugekommen sind nur `to_dict()`/`from_dict()` für die drei
+`Settings`-Datensätze. `SessionBackup` legt die Reihenfolge fest — Eingang,
+dann Rechen- und Oberschwingungsgruppe (ihre Parameter verweisen auf Elemente
+und Wiring-Units), dann Integration, zuletzt die Item-Tabelle — und prüft den
+Endzustand.
+
+### Die Überschneidung, die zur Kontrolle wurde
+
+`InputSnapshot` enthält die Messbereiche bereits; `RangeBackup` sichert denselben
+Zustand über einen anderen Codepfad. Zurückgeschrieben werden sie **nur** über
+den Input-Snapshot — der Bereichsteil dient als unabhängiger Zweitbeleg bei der
+Endkontrolle. Beides zu schreiben hieße, bei einem Zwischenfehler nicht mehr zu
+wissen, welcher Pfad zuletzt geschrieben hat.
+
+### Zwei Sicherungen
+
+Ein Backup von Gerät A wird nicht ohne `force=True` auf Gerät B geschrieben
+(verglichen werden Modell und Seriennummer, nicht die Firmware). Und die
+Formatversion steht in der Datei und wird beim Laden geprüft — sonst fiele eine
+fremde Datei erst mitten im Wiederherstellen auf.
+
+### Prüfung
+
+28 neue Prüfsätze in `tests/test_backup.py`, darunter der volle Zyklus:
+sichern, drei Gruppen verstellen, zurückschreiben, Endkontrolle ohne
+Abweichung.
+
+```text
+pytest: 655 passed
+ruff:   All checks passed
+mypy:   Success: no issues found in 19 source files
+```
+
+**Geräteabnahme steht aus** (M0-3).
+
+---
+
 ## Weitere bereits erledigte Infrastruktur
 
 - `.gitattributes` führt Textdateien einheitlich mit LF und schützt die DLL als binär.
