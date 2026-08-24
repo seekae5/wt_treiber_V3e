@@ -34,6 +34,13 @@ LAYERS: dict[str, set[str]] = {
     "wt3000_numeric": {"wt3000_core"},
     "wt3000_rangeio": {"wt3000_core", "wt3000_common"},
     "wt3000_input": {"wt3000_core", "wt3000_common"},
+    # NEU (M2-1/M3-2): die Geraetegruppen jenseits von ':INPut' und ':NUMeric',
+    # zunaechst ':INTEGrate'. Bewusst KEIN 'wt3000_input' in dieser Menge,
+    # obwohl die Aufzaehlungsregel dort herkam: Geschwisterimporte auf
+    # derselben Schicht sind der Anfang vom Ende der Richtung. Die Regel ist
+    # deshalb nach wt3000_common gewandert, statt hier eine Ausnahme zu
+    # bekommen - genau die Entscheidung, die dieser Test erzwingen soll.
+    "wt3000_deviceconfig": {"wt3000_core", "wt3000_common"},
     "wt3000_itemspec": {"wt3000_core", "wt3000_common", "wt3000_numeric"},
     "wt3000_ranging": {"wt3000_core", "wt3000_common", "wt3000_rangeio"},
     "wt3000_measure": {
@@ -65,6 +72,11 @@ LAYERS: dict[str, set[str]] = {
     # dem Anwender den haeufigsten Fall abnimmt. Das ist Buendeln von
     # Fachmodulen und damit genau die Aufgabe der Fassade; 'record()' selbst
     # bleibt formatfrei und nimmt jede beliebige Senke.
+    # UEBERARBEITET (M2-1/M3-2): 'wt3000_deviceconfig' ist dazugekommen - die
+    # Fassade reicht 'wt.integration' durch. Wieder nur Buendeln: die
+    # Integrationslogik steht vollstaendig im Fachmodul, hier haengt sie an
+    # einer Eigenschaft mit derselben Sperrweitergabe wie wt.input und
+    # wt.ranges.
     "wt3000_device": {
         "wt3000_transport",
         "wt3000_core",
@@ -72,6 +84,7 @@ LAYERS: dict[str, set[str]] = {
         "wt3000_numeric",
         "wt3000_rangeio",
         "wt3000_input",
+        "wt3000_deviceconfig",
         "wt3000_itemspec",
         "wt3000_ranging",
         "wt3000_measure",

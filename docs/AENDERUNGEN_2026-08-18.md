@@ -212,6 +212,80 @@ und abfragbar, aber von keiner Gruppe benutzt.
 
 ---
 
+## 2026-08-21 — Integrationssteuerung (M3-2 / M2-1)
+
+### Die größte funktionale Lücke
+
+Der Treiber konnte bisher nur Momentanwerte lesen. Eine Wh- oder Ah-Messung —
+die Kernfunktion eines Leistungsmessgeräts — war nicht steuerbar; die
+Anwendungsanalyse führt das als Rang 1. Neu ist `IntegrationConfig` in
+[wt3000_deviceconfig.py](../src/wt3000_scpi/wt3000_deviceconfig.py):
+Zustand, Betriebsart, Timer, Echtzeitfenster, Autokalibrierung,
+`start()`/`stop()`/`reset()`, der Kontextmanager `running()` und
+`wait_until_finished()`. `capture()`/`restore()` machen die Gruppe zugleich zur
+Vorlage für den gemeinsamen Snapshot aus M2-4.
+
+Dazu die Leseseite: `build_integration_profile()` in `wt3000_measure` führt
+TIME, WH, WHP, WHM, AH, AHP, AHM, WS und WQ je Element und SIGMA — ohne sie
+wäre die Funktion steuerbar, aber nicht auslesbar. Erreichbar über
+`wt.items.integration_profile()`, die Steuerung über `wt.integration`.
+
+### Der Modulname war schon entschieden
+
+Naheliegend wäre `wt3000_integrate.py` gewesen. Zwei Stellen im Bestand hatten
+die Frage aber bereits beantwortet: ROADMAP Abschnitt 3 führt
+`wt3000_deviceconfig` als geplanten Ort (M2-1), und der Klassenkopf von
+`MeasureControl` warnte, ein vorgezogenes eigenes M3-2-Modul erzeuge „genau die
+vierte Kopie derselben Parser, die M2-5 verhindern soll". Beides ist befolgt
+worden: das Modul trägt den vorgesehenen Namen, nimmt später Averaging und
+Frequenzmessquelle auf und schreibt keinen einzigen Parser neu.
+
+### Eine Regel ist dafür eine Schicht tiefer gewandert
+
+`canonical_enum_token()`/`enum_match()` lagen in `wt3000_input` (Layer 2) und
+waren damit für ein zweites Fachmodul derselben Schicht unerreichbar —
+Geschwisterimporte verbietet `LAYERS` in `tests/test_package_layout.py`.
+Gebraucht werden sie, weil das Gerät Kurzformen antwortet (`RES`, `NORM`). Die
+Regel steht jetzt in `wt3000_common`; in `wt3000_input` blieb nur die
+modulspezifische Kopfentfernung davor, die sich von der in `wt3000_common`
+tatsächlich unterscheidet. Ein Stück M2-5, nebenbei erledigt.
+
+### Vier Entscheidungen aus dem Gerätebefund
+
+- **Kurzformen** werden verstanden (`RES` → RESET, `NORM` → NORMAL). Ein
+  Treiber, der nur die Langform kennt, fällt am Gerät um.
+- **Keine Restzeit aus `:INTEGrate:RTIMe?`** — am Gerät widerlegt.
+  `remaining_seconds()` rechnet `TIMer − TIME`; TIME kommt im FLOat-Format als
+  Sekundenwert, im Binärpfad war dafür nichts zu ändern.
+- **Polling statt UPD-Bit** in `wait_until_finished()`, weil das Bit in 3556
+  Proben nicht getragen hat.
+- **`:INTEGrate:RESet` ist zusätzlich gesperrt** (`GROUP_RESET`): es verwirft
+  den Zählerstand, also den Messwert selbst.
+
+### Bewusst nicht gebaut
+
+Ein Zustandsvorbehalt vor `set_mode()`/`set_timer()` lag nahe, ist aber im
+Handbuch nicht belegt. Ein erfundener Vorbehalt blockiert einen womöglich
+zulässigen Aufruf; weist das Gerät ihn ab, kommt der Fall über die Fehlerqueue
+heraus. Die verbliebenen Vorbehalte sind als Entscheidungen des Treibers
+gekennzeichnet, nicht als Aussagen über das Gerät.
+
+### Prüfung
+
+47 neue Prüfsätze, davon 44 in `tests/test_deviceconfig.py`.
+
+```text
+pytest: 554 passed
+ruff:   All checks passed
+mypy:   Success: no issues found in 18 source files
+```
+
+**Offen bleibt die Geräteabnahme.** Jedes Kommando dieser Gruppe ist ein
+Set-Kommando und hängt an M0-3. Gebaut und gerätefrei durchgespielt ist der
+Ablauf vollständig; abgehakt ist M3-2 erst nach einem Lauf am realen Gerät.
+
+---
+
 ## Weitere bereits erledigte Infrastruktur
 
 - `.gitattributes` führt Textdateien einheitlich mit LF und schützt die DLL als binär.

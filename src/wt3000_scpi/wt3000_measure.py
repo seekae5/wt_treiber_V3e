@@ -56,12 +56,10 @@ def build_standard_profile() -> tuple[ItemSpec, ...]:
     ':MEASure?' auf U3/I3, deshalb liefern FU1 und FU2 strukturell NAN.
     Aendert sich die Frequenzmessquelle, ist diese Liste anzupassen.
 
-    OFFEN (ROADMAP M3-2): Fuer das dortige Abnahmekriterium - eine Wh-Messung
-    ueber eine definierte Dauer starten, beenden und auslesen - fehlen die
-    Integrationsitems (WH, WHP, WHM, AH, TIME; Schreibweise am Geraet zu
-    pruefen). Anzupassen ist dafuer nichts ausser dieser Datei:
-    ItemSpec.function ist eine freie Zeichenkette ohne Weissliste, es braucht
-    also nur ein zweites Profil neben diesem.
+    UEBERARBEITET (21.08.2026): Der frueher hier stehende offene Punkt zu den
+    Integrationsitems ist erledigt - sie stehen jetzt in
+    'build_integration_profile()' direkt darunter. Die damalige Einschaetzung
+    hat getragen: anzupassen war tatsaechlich nichts ausser dieser Datei.
     """
     three_phase = ("U", "I", "P", "S", "Q", "LAMBDA", "PHI")
     sum_functions = ("U", "I", "P", "S", "Q", "LAMBDA")
@@ -73,6 +71,50 @@ def build_standard_profile() -> tuple[ItemSpec, ...]:
     specs.append(ItemSpec("FU", "3"))  # einzige konfigurierte Frequenzquelle
     specs.extend(ItemSpec(f, "SIGMA") for f in sum_functions)
     specs.extend(ItemSpec(f, "4") for f in dc_functions)
+    return tuple(specs)
+
+
+#: Die Groessen der Integrationsfunktion (Handbuch 6-99, Musterbelegung 3).
+#
+# WH/WHP/WHM  Energie gesamt, nur aufgenommene, nur abgegebene    [Wh]
+# AH/AHP/AHM  Ladung gesamt, positiv, negativ                     [Ah]
+# WS, WQ      Schein- und Blindenergie                            [VAh, varh]
+INTEGRATION_FUNCTIONS: tuple[str, ...] = ("WH", "WHP", "WHM", "AH", "AHP", "AHM", "WS", "WQ")
+
+
+def build_integration_profile() -> tuple[ItemSpec, ...]:
+    """Messprofil fuer eine Wh-/Ah-Messung - das Gegenstueck zur Steuerung.
+
+    NEU (ROADMAP M3-2, Rang 1 der Analyse): 'IntegrationConfig' aus
+    wt3000_deviceconfig startet und stoppt die Integration, LIEST sie aber
+    nicht aus - die aufgelaufenen Werte kommen wie alle Messwerte ueber die
+    Item-Tabelle. Ohne dieses Profil koennte ein Anwender die Integration
+    steuern und danach nur Momentanwerte abholen; die Funktion waere zur
+    Haelfte da.
+
+    Aufbau, gleiche Verdrahtung wie 'build_standard_profile()' (V3A3,P1W2):
+
+      1.  TIME          verstrichene Integrationszeit, EINMAL - die Groesse
+                        gilt geraeteweit, nicht je Element. Bei
+                        ':NUMeric:FORMat FLOat' kommt sie als gewoehnlicher
+                        Gleitkommawert in SEKUNDEN (Handbuch zur
+                        NUMeric-Gruppe: 1 Stunde -> 3600). Genau dieser Wert
+                        geht in 'IntegrationConfig.remaining_seconds()'.
+      2.  U, I, P       je Element und SIGMA - der Momentanwertkontext, ohne
+                        den eine Energiebilanz nicht einzuordnen ist
+      3.  Integration   INTEGRATION_FUNCTIONS je Element und SIGMA
+
+    'verify=True' bei den Integrationsitems ist kein Schmuck: keine dieser
+    acht Funktionen ist an diesem Geraet je gelesen worden. Die Kennzeichnung
+    aus ItemSpec sagt genau das - "auf dem Original-WT3000 nicht gesichert".
+    """
+    specs: list[ItemSpec] = [ItemSpec("TIME", "1", verify=True)]
+
+    instant = ("U", "I", "P")
+    for element in ("1", "2", "3", "SIGMA", "4"):
+        specs.extend(ItemSpec(f, element) for f in instant)
+    for element in ("1", "2", "3", "SIGMA", "4"):
+        specs.extend(ItemSpec(f, element, verify=True) for f in INTEGRATION_FUNCTIONS)
     return tuple(specs)
 
 

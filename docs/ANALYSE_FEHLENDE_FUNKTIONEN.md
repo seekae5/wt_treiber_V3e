@@ -215,6 +215,10 @@ gliedert.
   „vollständigen" Leistungsmessgerätetreiber.
 * Abhängigkeit: ROADMAP M3-2 (Gerätesteuerung), am Gerät zu verifizieren
   **(prüfen)**
+* **Erledigt am 21.08.2026** — `IntegrationConfig` in
+  [`wt3000_deviceconfig.py`](../src/wt3000_scpi/wt3000_deviceconfig.py),
+  Details in Abschnitt 7. Der Geräteteil des **(prüfen)** bleibt offen: jedes
+  Kommando dieser Gruppe ist ein Set-Kommando.
 
 ### 2.2 Berechnete/abgeleitete Messgrößen
 * Fehlt: `:MEASure`-Gruppe — `AVERaging`, `COMPensation`, `DMeasure` (DC-Anteil),
@@ -323,7 +327,7 @@ gliedert.
 | Rang | Baustein | Option nötig? | Warum | Am Gerät (0.3, 21.08.2026) |
 |---|---|---|---|---|
 | 0 | `*OPT?` in `DeviceInfo` auswerten | keine (Common Command) | Voraussetzung für alle optionsgebundenen Punkte unten — sollte vor Rang 3, 5, 8, 10 stehen, damit keine Arbeit an nicht vorhandener Hardware entsteht | **umgesetzt 2026-08-21** — siehe Abschnitt 6 |
-| 1 | `IntegratorControl` (`:INTEGrate`) — Wh/Ah-Messung steuern | **nein** | Kernfunktion eines Leistungsmessgeräts, heute nicht steuerbar | unverändert; `:INTEGrate:STATe?` antwortet (`RES`) |
+| 1 | `IntegratorControl` (`:INTEGrate`) — Wh/Ah-Messung steuern | **nein** | Kernfunktion eines Leistungsmessgeräts, heute nicht steuerbar | **umgesetzt 2026-08-21** als `IntegrationConfig` — siehe Abschnitt 7 |
 | 2 | `ComputationConfig` (`:MEASure`, insb. Averaging) | **nein** (außer Delta-Teil, siehe unten) | Betrifft praktisch jede Messung, nicht nur Spezialfälle | Delta-Teil **freigegeben** — `DT` ist verbaut |
 | 3 | `HarmonicsConfig` (`:HARMonics`) | **`/G5` oder `/G6`** | Einer der Hauptanwendungsfälle des WT3000 — aber erst nach `*OPT?`-Check angehen | **freigegeben** — `G6` ist verbaut (obwohl `G5` fehlt) |
 | 4 | Steuerbares Mess-Objekt + Trigger (`*TRG`/`GET`, `STATus:CONDition?`-Polling auf UPD-Bit) | **nein** | Grundlage für 2.1, 2.6 und robuste Automatisierung; Ereignismechanismus jetzt am Handbuch belegt (Abschnitt 0.2), nicht mehr nur Vermutung | UPD-Polling **widerlegt** (0 Treffer in 3556 Proben) — Weg über EESE/SRQ oder Dublettenerkennung nötig |
@@ -436,3 +440,81 @@ optionsgebundene Gruppe im Treiber. Der erste Aufruf von `require_option()`
 aus Fachcode heraus entsteht mit Rang 3 (`:HARMonics`) oder Rang 5
 (`:CBCycle`). Die übrigen Teilpunkte von M1-3 (Bereichstabellen nach
 Modultyp, Modellprüfung beim Verbinden) bleiben offen.
+---
+
+## 7 — Umgesetzt: Rang 1, Integrationssteuerung (2026-08-21)
+
+Die größte funktionale Lücke ist geschlossen. Der Treiber kann eine Wh-/Ah-Messung
+jetzt starten, begrenzen, beenden und auslesen, statt nur Momentanwerte zu holen.
+
+### Wo es steht — und warum nicht dort, wo man es zuerst vermutet
+
+Naheliegend wäre ein Modul `wt3000_integrate.py` gewesen. Dagegen sprachen zwei
+Stellen im Bestand, die diese Frage schon beantwortet hatten:
+
+* ROADMAP Abschnitt 3 führt `wt3000_deviceconfig` (M2-1) als geplanten Ort für
+  genau diese Gruppen;
+* der Klassenkopf von `MeasureControl` warnte ausdrücklich: „Wird M3-2 vorab als
+  eigenes Modul gebaut, entsteht genau die vierte Kopie derselben Parser, die
+  M2-5 verhindern soll" — mit dem Vorschlag, die Knotenebene nach unten in die
+  Konfigurationsschicht zu legen.
+
+Genau so ist es gebaut: [`wt3000_deviceconfig.py`](../src/wt3000_scpi/wt3000_deviceconfig.py)
+auf Layer 2, `:INTEGrate` als erste Gruppe, Averaging und Frequenzmessquelle
+(Rang 2) kommen später daneben statt in ein drittes Modul.
+
+### Was die Klasse kann
+
+| Baustein | Bedeutung |
+|---|---|
+| `state()`, `is_running()` | Zustand: RESET, READY, START, STOP, ERROR, TIMEUP |
+| `mode()` / `set_mode()` | NORMAL, CONTINUOUS und die beiden Echtzeitvarianten |
+| `timer_seconds()` / `set_timer()` | Dauer in Sekunden; `set_timer(minutes=90)` wird zu `1,30,0` |
+| `auto_calibration()` / `set_auto_calibration()` | Nullabgleich während des Laufs |
+| `real_time_window()` / `set_real_time_window()` | Wanduhrfenster der R-Betriebsarten |
+| `start()`, `stop()`, `reset()` | die drei Aktionen |
+| `running()` | Kontextmanager: startet, und stoppt garantiert im `finally` |
+| `wait_until_finished()` | wartet auf STOP/TIMEUP/ERROR, mit Zeitschranke |
+| `remaining_seconds(elapsed)` | Restzeit aus Timer minus verstrichener Zeit |
+| `capture()` / `restore()` | Momentaufnahme der Gruppe — Vorlage für M2-4 |
+
+Dazu die Leseseite: `build_integration_profile()` in `wt3000_measure`
+(TIME, WH, WHP, WHM, AH, AHP, AHM, WS, WQ je Element und SIGMA), erreichbar über
+`wt.items.integration_profile()`. Ohne sie wäre die Funktion zur Hälfte da —
+steuerbar, aber nicht auslesbar.
+
+### Vier Entscheidungen, die aus dem Gerätebefund stammen
+
+1. **Kurzformen.** Das Gerät antwortet `RES` und `NORM`, nicht `RESET` und
+   `NORMAL` (Abschnitt 0.3). Ein Treiber, der nur die Langform kennt, fällt am
+   Gerät um. Die Zuordnung übernimmt `canonical_enum_token` — dieselbe Regel,
+   die schon `RMEA → RMEAN` bei den Messmodi erledigt.
+2. **Keine Restzeit aus `:INTEGrate:RTIMe?`.** Die Annahme aus Abschnitt 5 ist
+   am Gerät widerlegt worden; `remaining_seconds()` rechnet stattdessen
+   `TIMer − TIME`, wobei TIME das NUMeric-Item ist. Bei `:NUMeric:FORMat FLOat`
+   kommt es als gewöhnlicher Gleitkommawert in Sekunden — im Binärpfad war
+   dafür nichts zu ändern.
+3. **Polling statt Ereignis.** `wait_until_finished()` fragt den Zustand ab,
+   statt auf das UPD-Bit zu warten: das hat in 3556 Proben nicht getragen
+   (Abschnitt 0.3, Frage 5).
+4. **`:INTEGrate:RESet` ist zusätzlich gesperrt.** Es verwirft den
+   Zählerstand — den Messwert selbst, nicht bloß eine Einstellung. Freigabe
+   ausdrücklich über `unlocked(GROUP_RESET)`, wie bei einem Bereichswechsel.
+
+### Was bewusst NICHT gebaut wurde
+
+Ein Zustandsvorbehalt vor `set_mode()`/`set_timer()` („nur im zurückgesetzten
+Zustand änderbar") lag nahe, ist aber im Handbuch nicht belegt und am Gerät nicht
+geprüft. Ein erfundener Vorbehalt würde einen Aufruf blockieren, der vielleicht
+zulässig ist; weist das Gerät ihn ab, kommt der Fall ohnehin über die
+Fehlerqueue heraus. Die Vorbehalte, die geblieben sind — zweimal starten, nach
+TIMEUP ohne Reset starten, während des Laufs zurücksetzen —, sind als
+Entscheidungen **dieses Treibers** gekennzeichnet und nicht als Aussagen über
+das Gerät.
+
+### Offen
+
+Die **Geräteabnahme**. Jedes Kommando dieser Gruppe ist ein Set-Kommando und
+hängt damit an ROADMAP M0-3 (nimmt das Gerät Set-Kommandos über Ethernet ohne
+`:COMMunicate:REMote ON` an?). Gebaut und gerätefrei durchgespielt ist der
+Ablauf vollständig; abgehakt ist M3-2 erst nach einem Lauf am realen Gerät.

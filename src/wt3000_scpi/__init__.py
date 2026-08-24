@@ -84,6 +84,18 @@ from .wt3000_device import (
     MeasureControl,
     WT3000,
 )
+# NEU (M2-1/M3-2): die Integrationssteuerung. Sie steht hier neben der
+# Fassade, weil eine Wh-Messung ohne ihre Aufzaehlungen und Gruppennamen nicht
+# zu schreiben ist - 'IntegrationMode' waehlt die Betriebsart, GROUP_RESET
+# gibt das Zuruecksetzen frei.
+from .wt3000_deviceconfig import (
+    GROUP_RESET,
+    IntegrationConfig,
+    IntegrationMode,
+    IntegrationSettings,
+    IntegrationState,
+    IntegrationStateError,
+)
 from .wt3000_input import (
     ConfigLocked,
     LineFilter,
@@ -95,7 +107,13 @@ from .wt3000_input import (
 # NEU (M4-1): der Datensatz. Er steht hier neben der Fassade und nicht nur im
 # Fachmodul, weil ab M4-2 jedes Ausgabeformat gegen ihn gebaut wird - wer einen
 # eigenen Sink schreibt, soll ihn aus der Paketwurzel holen koennen wie 'WT3000'.
-from .wt3000_measure import Sample, SampleMark, SampleSink
+from .wt3000_measure import (
+    Sample,
+    SampleMark,
+    SampleSink,
+    build_integration_profile,
+    build_standard_profile,
+)
 from .wt3000_numeric import NumericValue, ValueStatus
 from .wt3000_rangeio import ChangesNotAllowed, Quantity
 # NEU (M4-2): die Ausgabeformate. Wer eine Messreihe wegschreibt, waehlt hier -
@@ -135,6 +153,16 @@ __all__ = [
     "MeasMode",
     "ValueStatus",
     "NumericValue",
+    # Integration (M3-2)
+    "IntegrationConfig",
+    "IntegrationMode",
+    "IntegrationSettings",
+    "IntegrationState",
+    "IntegrationStateError",
+    "GROUP_RESET",
+    # Messprofile
+    "build_standard_profile",
+    "build_integration_profile",
     # Datensatz (M4-1)
     "Sample",
     "SampleMark",
@@ -159,6 +187,8 @@ MODULES: tuple[str, ...] = (
     "wt3000_numeric",
     "wt3000_rangeio",
     "wt3000_input",
+    # NEU (M2-1/M3-2): ':INTEGrate' und die weiteren Gruppen aus M2-1.
+    "wt3000_deviceconfig",
     "wt3000_itemspec",
     "wt3000_ranging",
     "wt3000_measure",

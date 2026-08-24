@@ -424,6 +424,42 @@ class ItemTableTransport(FakeTransport):
 
 
 # ---------------------------------------------------------------------------
+# Antworttabelle der Integrationsgruppe
+# NEU (ROADMAP M3-2, Rang 1 der Analyse)
+# ---------------------------------------------------------------------------
+#
+# Die Voreinstellungen sind KEINE Erfindung: es sind die Werte, die das reale
+# Geraet am 21.08.2026 gemeldet hat (docs/ANALYSE_FEHLENDE_FUNKTIONEN.md,
+# Abschnitt 0.3) - einschliesslich der Kurzformen 'RES' und 'NORM', an denen
+# ein Treiber scheitert, der nur die Langform kennt.
+
+
+def integrate_responses(
+    mode: str = "NORM",
+    state: str = "RES",
+    timer: str = "0,0,0",
+    acal: str = "0",
+    rtime_start: str = "2006,1,1,0,0,0",
+    rtime_end: str = "2006,1,1,1,0,0",
+) -> dict[str, str]:
+    """Alles, was 'IntegrationConfig.capture()' abfragt."""
+    return {
+        ":INTEGRATE:MODE": mode,
+        ":INTEGRATE:STATE": state,
+        ":INTEGRATE:TIMER": timer,
+        ":INTEGRATE:ACAL": acal,
+        ":INTEGRATE:RTIME:START": rtime_start,
+        ":INTEGRATE:RTIME:END": rtime_end,
+    }
+
+
+@pytest.fixture
+def integrationsantworten() -> dict[str, str]:
+    """Antworttabelle der Integrationsgruppe im Ausgangszustand."""
+    return integrate_responses()
+
+
+# ---------------------------------------------------------------------------
 # Antworttabelle fuer die Eingangskonfiguration (Stufe 5)
 # NEU (Schritt 7 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-13)
 # ---------------------------------------------------------------------------

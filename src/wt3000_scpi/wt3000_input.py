@@ -30,6 +30,7 @@ from .wt3000_core import WTError, WTSession
 # Bereichswerte werden ausschliesslich hierueber geformt - dieselbe Funktion,
 # die auch wt3000_rangeio.py benutzt. Am Geraet belegt ist die reine NRf-Form
 # ('1000'); zwei Schreibweisen fuer denselben Knoten waeren Befund B-01.
+from .wt3000_common import canonical_enum_token as _canonical_enum_token
 from .wt3000_common import format_nrf
 
 _log = logging.getLogger("wt3000.input")
@@ -321,22 +322,26 @@ SYNC_TOKENS: frozenset[str] = frozenset(s.value.upper() for s in SyncSource)
 MODE_TOKENS: frozenset[str] = frozenset(m.value.upper() for m in MeasMode)
 
 
+# UEBERARBEITET (M2-5-Teil): Die Zuordnungsregel selbst steht seit dem
+# 21.08.2026 in wt3000_common - sie ist geraeteunabhaengig, und das zweite
+# Fachmodul derselben Schicht (wt3000_deviceconfig, ':INTEGrate') braucht sie
+# ebenso. Hier bleibt genau das, was NICHT gemeinsam ist: die Kopfentfernung.
+#
+# Dieses Modul entfernt Koepfe nach der Regel "Wert ist das letzte
+# Whitespace-Token" (strip_header oben), wt3000_common nach der Regel "fuehrt
+# der Text mit ':' und enthaelt ein Leerzeichen, ist der Wert alles danach".
+# Fuer verkettete Antworten ohne fuehrenden Doppelpunkt ('ELEMENT2 OFF')
+# liefern die beiden Unterschiedliches - deshalb bleibt hier ein eigener
+# Einstieg, statt die gemeinsame Funktion direkt zu benutzen. Diese beiden
+# Kopfregeln zusammenzufuehren ist der noch offene Rest von M2-5.
+
+
 def canonical_enum_token(text: str, allowed: frozenset[str]) -> str:
     """Kurzform der Geraeteantwort auf die Langform der Aufzaehlung abbilden.
 
     'EXT' -> 'EXTERNAL', 'EXTERNAL' -> 'EXTERNAL', 'I3' -> 'I3'.
-
-    Ist die Kurzform mehrdeutig (mehrere Kandidaten) oder unbekannt, bleibt der
-    Text unveraendert. Der Vergleich schlaegt dann an - lieber eine gemeldete
-    Abweichung als eine stillschweigend falsche Zuordnung.
     """
-    token = strip_header(text).upper()
-    if token in allowed:
-        return token
-    candidates = [value for value in allowed if value.startswith(token)]
-    if len(candidates) == 1:
-        return candidates[0]
-    return token
+    return _canonical_enum_token(strip_header(text), allowed)
 
 
 def enum_match(wanted: str, actual: str, allowed: frozenset[str]) -> bool:

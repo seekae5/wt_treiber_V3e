@@ -200,6 +200,38 @@ def condition_warnings(bits: int) -> list[str]:
     return [text for maske, text in _CONDITION_BITS if bits & maske]
 
 
+# ---------------------------------------------------------------------------
+# Aufzaehlungswerte
+# NEU (M2-5-Teil, gebraucht ab M2-1/M3-2): die Regel lag bisher in
+# wt3000_input.py und war damit fuer ein zweites Fachmodul derselben Schicht
+# unerreichbar - LAYERS verbietet den Geschwisterimport, und zwar zu Recht.
+# Sie ist geraeteunabhaengig und gehoert deshalb hierher.
+# ---------------------------------------------------------------------------
+
+
+def canonical_enum_token(text: str, allowed: frozenset[str]) -> str:
+    """Kurzform der Geraeteantwort auf die Langform der Aufzaehlung abbilden.
+
+    'EXT' -> 'EXTERNAL', 'NORM' -> 'NORMAL', 'RES' -> 'RESET', 'I3' -> 'I3'.
+
+    Ist die Kurzform mehrdeutig (mehrere Kandidaten) oder unbekannt, bleibt der
+    Text unveraendert. Der Vergleich schlaegt dann an - lieber eine gemeldete
+    Abweichung als eine stillschweigend falsche Zuordnung.
+    """
+    token = strip_response_header(text).upper()
+    if token in allowed:
+        return token
+    candidates = [value for value in allowed if value.startswith(token)]
+    if len(candidates) == 1:
+        return candidates[0]
+    return token
+
+
+def enum_match(wanted: str, actual: str, allowed: frozenset[str]) -> bool:
+    """Einzige Vergleichsregel fuer Aufzaehlungswerte."""
+    return canonical_enum_token(wanted, allowed) == canonical_enum_token(actual, allowed)
+
+
 def parse_boolean(response: str, context: str = "") -> bool:
     """Boolean-Antwort auswerten. Das Geraet antwortet mit '1' bzw. '0'."""
     text = strip_response_header(response).upper()

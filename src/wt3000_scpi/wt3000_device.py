@@ -58,6 +58,8 @@ from .wt3000_common import (
     strip_response_header,
 )
 from .wt3000_core import TmctlTransport, Transport, WTConfig, WTError, WTSession
+# NEU (M3-2/M2-1): die Geraetegruppen jenseits von ':INPut' und ':NUMeric'.
+from .wt3000_deviceconfig import IntegrationConfig
 from .wt3000_input import InputConfig, WiringUnit
 from .wt3000_itemspec import (
     ItemSpec,
@@ -73,6 +75,7 @@ from .wt3000_measure import (
     LoopStatistics,
     NumericHold,
     SampleSink,
+    build_integration_profile,
     build_standard_profile,
     run_measurement_loop,
     write_metadata,
@@ -515,6 +518,15 @@ class ItemAccess:
         return ItemTable.read_from_device(self._session)
 
     @staticmethod
+    def integration_profile() -> tuple[ItemSpec, ...]:
+        """Messprofil fuer eine Wh-/Ah-Messung (TIME, WH, AH, ... je Element).
+
+        Das Gegenstueck zu 'wt.integration': jene Klasse steuert den Lauf,
+        dieses Profil macht sein Ergebnis lesbar.
+        """
+        return build_integration_profile()
+
+    @staticmethod
     def standard_profile() -> tuple[ItemSpec, ...]:
         """Das Messprofil dieses Aufbaus (aus wt3000_measure)."""
         return build_standard_profile()
@@ -651,16 +663,20 @@ class MeasureControl:
     erreichbar, nicht steuerbar - das ist M3-1 (Aufzeichnung als Objekt mit
     start()/stop()) und ausdruecklich nicht Teil von M1-1.
 
-    OFFEN (ROADMAP M3-2) - Zustaendigkeit ungeklaert: Die Geraetesteuerung
-    (':INTEGrate:STARt / :STOP / :RESet') hat hier noch keinen Platz, und wohin
-    sie gehoert, entscheidet die ROADMAP nicht. ':INTEGrate' steht dort
-    zweimal: unter M2-1 als Gruppe des neuen Moduls 'wt3000_deviceconfig.py'
-    (Layer 2/3, mit Rueckleseprobe und Gruppensperre wie wt3000_input) und
-    unter M3-2 als Ablauf. Wird M3-2 vorab als eigenes Modul gebaut, entsteht
-    genau die vierte Kopie derselben Parser, die M2-5 verhindern soll.
-    Vorschlag: die Knotenebene (MODE, TIMer, RTIMe, STATe?) gehoert nach unten
-    in die Konfigurationsschicht, hier bleibt nur der Ablauf
-    'ruecksetzen - starten - warten - auslesen - stoppen'.
+    ENTSCHIEDEN (21.08.2026), frueher hier als offene Zustaendigkeitsfrage
+    notiert: Die Geraetesteuerung (':INTEGrate:STARt / :STOP / :RESet') sitzt
+    NICHT hier, sondern in 'wt3000_deviceconfig.IntegrationConfig' - dem
+    Modul, das ROADMAP Abschnitt 3 unter M2-1 ohnehin vorsieht. Der damals
+    hier notierte Vorschlag ("die Knotenebene gehoert nach unten in die
+    Konfigurationsschicht") ist genau so umgesetzt worden, und die befuerchtete
+    vierte Parserkopie ist nicht entstanden: das neue Modul benutzt
+    ausschliesslich die Regeln aus wt3000_common.
+
+    Was hier bleibt, ist die Leseseite: die aufgelaufenen Werte kommen ueber
+    die Item-Tabelle wie alle Messwerte. Das passende Profil steht in
+    'wt3000_measure.build_integration_profile()' und ist ueber
+    'ItemAccess.integration_profile()' erreichbar - also neben
+    'standard_profile()', wo ein Messprofil hingehoert.
 
     OFFEN (ROADMAP M0-3) - blockiert die Erprobung von M3-2, nicht dessen
     Umsetzung: jedes Kommando dort ist ein Set-Kommando (auch '*CLS'), verlangt
@@ -890,6 +906,7 @@ class WT3000:
         self._ranges: RangeAccess | None = None
         self._items: ItemAccess | None = None
         self._measure: MeasureControl | None = None
+        self._integration: IntegrationConfig | None = None
 
     # -- Erzeugen -----------------------------------------------------------
 
@@ -1037,6 +1054,26 @@ class WT3000:
         if self._items is None:
             self._items = ItemAccess(self._session, allow_changes=self._allow_changes)
         return self._items
+
+    @property
+    def integration(self) -> IntegrationConfig:
+        """Integrationsfunktion (':INTEGrate') - Wh- und Ah-Messung steuern.
+
+        NEU (ROADMAP M3-2, Rang 1 der Analyse). Die Gruppe braucht keine
+        Geraeteoption; 'wt.device.supports(\":INTEGrate\")' ist immer wahr und
+        wird hier deshalb nicht abgefragt.
+
+        Zur Sperre: 'allow_changes' wird durchgereicht wie bei den anderen
+        Fachobjekten, und ':INTEGrate:RESet' bleibt zusaetzlich geschuetzt -
+        es verwirft den Zaehlerstand unwiderruflich. Freigabe ausdruecklich
+        ueber 'wt.integration.unlocked(GROUP_RESET)'.
+        """
+        self._require_open()
+        if self._integration is None:
+            self._integration = IntegrationConfig(
+                self._session, allow_changes=self._allow_changes
+            )
+        return self._integration
 
     @property
     def measure(self) -> MeasureControl:

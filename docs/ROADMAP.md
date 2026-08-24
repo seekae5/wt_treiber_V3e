@@ -45,8 +45,8 @@ steuerbaren Langzeitmessung.
 |---|---|---|
 | M0 — Gerätefragen | **teilweise** | ein protokollierter Gerätetermin; Spannungssyntax ist bereits belegt |
 | M1 — Fundament | **teilweise** | M1-3 bis M1-5 |
-| M2 — Konfiguration | **offen** | Parser vereinheitlichen, dann fehlende Gerätegruppen ergänzen |
-| M3 — Messsteuerung | **offen** | Sitzungsbesitz entscheiden, danach M3-1 |
+| M2 — Konfiguration | **teilweise** | M2-1 begonnen (`:INTEGrate`); Parser vereinheitlichen, dann weitere Gruppen |
+| M3 — Messsteuerung | **teilweise** | M3-2 Integration umgesetzt; Sitzungsbesitz entscheiden, danach M3-1 |
 | M4 — Export | **teilweise** | M4-3 Einheiten und Metadaten |
 | M5 — Auslieferung | **teilweise** | CLI, Paketmetadaten und CI |
 
@@ -181,17 +181,26 @@ verschiebt noch Cleanup verhindert.
 
 ## M2 — Konfiguration lesen und einstellen
 
-### M2-1 — Fehlende Gerätegruppen `L`
+### M2-1 — Fehlende Gerätegruppen `L` — **begonnen 2026-08-21**
 
-Nach M2-5 ein neues Fachmodul für strukturierte Getter, Setter, Snapshot, Diff und
-Restore ergänzen. Reihenfolge:
+Das Fachmodul [wt3000_deviceconfig.py](../src/wt3000_scpi/wt3000_deviceconfig.py)
+existiert seit dem 21.08.2026 mit Gettern, Settern, Snapshot (`capture()`) und
+Restore für seine erste Gruppe. Reihenfolge:
 
 1. Kommunikation
 2. Averaging
 3. Frequenzmessquelle
-4. Integration
-5. Harmonische und optionsabhängige Gruppen
+4. [x] **Integration** — umgesetzt, siehe M3-2
+5. Harmonische und optionsabhängige Gruppen — der Optionscheck dafür steht
+   seit M1-3 bereit (`wt.device.supports(":HARMonics")`)
 6. Anzeige und System rein lesend
+
+Vorgezogen wurde die Integration bewusst gegen die Nummernfolge: sie ist Rang 1
+der Anwendungsanalyse und hängt an keiner der offenen Parserfragen. Die Sorge
+aus M2-5 — jede neue Gruppe bringt eine weitere Parserkopie mit — ist dabei
+nicht eingetreten, weil das Modul ausschließlich die Regeln aus `wt3000_common`
+benutzt; die Aufzählungsregel ist dafür aus `wt3000_input` eine Schicht
+tiefergezogen worden.
 
 Schreiben wird nur für tatsächlich benötigte Gruppen freigegeben. Kommandonamen für
 noch nicht verwendete Gruppen sind vorab am Handbuch und Gerät zu prüfen.
@@ -250,15 +259,27 @@ Mess-Thread gehört.
 `Sample` und `SampleSink` sind bereits vorhanden; die Schleife muss dafür nicht erneut
 an ein Ausgabeformat angepasst werden.
 
-### M3-2 — Gerätesteuerung `M · am Gerät`
+### M3-2 — Gerätesteuerung `M · am Gerät` — **teilweise umgesetzt 2026-08-21**
 
-- Integration starten, stoppen und zurücksetzen **(prüfen)**
-- Einzelmessung im HOLD-Betrieb **(prüfen)**
-- `*OPC?` für langsame Zustandswechsel prüfen
-- `*CLS` vor einem Lauf; `*RST` nicht als normalen Bedienweg anbieten
+- [x] **Integration starten, stoppen und zurücksetzen** — `IntegrationConfig` in
+  [wt3000_deviceconfig.py](../src/wt3000_scpi/wt3000_deviceconfig.py) mit
+  `start()`, `stop()`, `reset()`, `running()`, Betriebsart, Timer,
+  Echtzeitfenster und Autokalibrierung. Gerätefrei geprüft; die
+  **Geräteabnahme steht aus** und hängt an M0-3 (jedes dieser Kommandos ist
+  ein Set-Kommando).
+- [x] **Messgrößen dazu** — `build_integration_profile()` (TIME, WH, WHP, WHM,
+  AH, AHP, AHM, WS, WQ je Element und SIGMA), erreichbar über
+  `wt.items.integration_profile()`
+- Einzelmessung im HOLD-Betrieb **(prüfen)** — unverändert offen; der Befund zu
+  `:SINGle` steht im Klassenkopf von `NumericHold`
+- `*OPC?` für langsame Zustandswechsel prüfen — offen. Ersatzweise gebaut ist
+  `wait_until_finished()`, das den Zustand pollt; die Begründung (UPD-Bit am
+  Gerät widerlegt) steht dort
+- `*CLS` vor einem Lauf; `*RST` nicht als normalen Bedienweg anbieten — offen
 
 **Fertig, wenn:** eine Wh-Messung über definierte Dauer sicher gestartet, beendet und
-ausgelesen werden kann.
+ausgelesen werden kann. — Der Weg dorthin ist gebaut und gerätefrei durchgespielt;
+zum Abhaken fehlt der Lauf am realen Gerät.
 
 ### M3-3 — Gerätetakt statt blindem `sleep` `M`
 
@@ -366,14 +387,14 @@ Transport        wt3000_transport
 Sitzung/Regeln   wt3000_core, wt3000_common
 
 Fachzugriffe     wt3000_numeric, wt3000_rangeio, wt3000_input
+                 wt3000_deviceconfig   (M2-1, seit 2026-08-21: ':INTEGrate')
 
 Abläufe          wt3000_itemspec, wt3000_ranging, wt3000_measure
 Ausgabe          wt3000_sinks
 
 Fassade          wt3000_device
 
-Geplant          wt3000_deviceconfig   (M2-1)
-                 wt3000_backup         (M2-4)
+Geplant          wt3000_backup         (M2-4)
                  cli.py                (M5-2)
 ```
 

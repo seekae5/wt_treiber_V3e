@@ -225,6 +225,7 @@ Layer 1   wt3000_core        WTSession: Query-Regeln, Blockdaten, Fehlerqueue, N
 Layer 2   wt3000_numeric     ':NUMeric', Item-Tabelle, FLOat-Blockparser
           wt3000_rangeio     ':INPut'-Bereichsknoten
           wt3000_input       übrige ':INPut'-Stellgrößen
+          wt3000_deviceconfig  ':INTEGrate' — Wh-/Ah-Messung steuern
 Layer 3   wt3000_itemspec    Ablauf um die Item-Tabelle
           wt3000_ranging     Ablauf um die Messbereiche
           wt3000_measure     Messschleife und CSV
