@@ -22,9 +22,16 @@
 #   IntegrationConfig   ':INTEGrate' - Wh-/Ah-Messung steuern (Rang 1)
 #   ComputationConfig   ':MEASure'   - Averaging, Wirkungsgrad,
 #                                      Frequenzmessquelle (Rang 2)
+#   HarmonicsConfig     ':HARMonics' - Oberschwingungsanalyse (Rang 3)
 #
-# Beide teilen sich Sperre, Schreibpfad und Parser; hinzugekommen ist fuer die
-# zweite Gruppe keine einzige neue Parserregel.
+# Alle drei teilen sich Sperre, Schreibpfad und Parser; hinzugekommen ist fuer
+# die zweite und dritte Gruppe keine einzige neue Parserregel.
+#
+# ':HARMonics' ist die erste Gruppe hier, die eine GERAETEOPTION verlangt
+# ('/G5' oder '/G6'). Geprueft wird das nicht in dieser Datei, sondern an der
+# Fassade: 'DeviceInfo.require_option()' kennt den Steckbrief, dieses Modul
+# nicht. Damit ist die Optionserfassung aus M1-3 zum ersten Mal nicht nur
+# vorhanden, sondern im Weg eines Aufrufers.
 #
 # Kein einziger Parser ist dafuer neu geschrieben worden: Kopfentfernung,
 # NR1/NR3, Boolean, NRf-Formatierung und die Aufzaehlungsregel kommen alle aus
@@ -1448,6 +1455,489 @@ class ComputationConfig:
             _log.info("%s", line)
 
     # -- gemeinsam ----------------------------------------------------------
+
+    def _require_element(self, element: int, was: str) -> None:
+        """Elementnummer gegen die bestueckte Liste halten."""
+        if element not in self._elements:
+            raise WTError(
+                f"{was}: Element {element} ist nicht bestueckt "
+                f"(bestueckt: {self._elements})"
+            )
+
+
+# ===========================================================================
+# Oberschwingungen ':HARMonics'
+# NEU (ROADMAP M2-1 Punkt 5, Rang 3 aus ANALYSE_FEHLENDE_FUNKTIONEN.md)
+# ===========================================================================
+#
+# "Der WT3000 wird haeufig gerade wegen Oberschwingungsmessung eingesetzt
+# (Netzqualitaet, Normpruefung) - ohne dieses Modul deckt der Treiber einen
+# der Hauptanwendungsfaelle des Geraets gar nicht ab" (Analyse 2.3).
+#
+# OPTION: Die ganze Gruppe verlangt '/G5' oder '/G6' (Handbuch 6-57: "valid
+# only when the advanced computation function (/G6 option) is installed").
+# Am eingemessenen Geraet ist '/G6' verbaut - '*OPT?' -> G6,B5,DT,C7,C5,CC -,
+# die Gruppe ist dort also ansprechbar, obwohl '/G5' fehlt. Geprueft wird das
+# an der Fassade (siehe Dateikopf), nicht hier.
+#
+# EINE HANDBUCHSTELLE, DIE MAN NICHT UEBERSEHEN DARF
+# --------------------------------------------------
+# Zur PLL-Quelle 'SAMPle' steht auf Seite 6-58: "If SAMPle is selected, it is
+# used in wide bandwidth harmonic measurement mode. In other measurement
+# modes, EXTernal is used. 'EXTernal' is also returned in response to a
+# query." Das Geraet antwortet also auf eine Abfrage moeglicherweise mit einem
+# ANDEREN Wert als dem gesetzten - und genau das ist der Fall, den die
+# Rueckleseprobe dieses Moduls sonst als Fehler meldet. 'set_pll_source()'
+# behandelt ihn deshalb ausdruecklich; ohne diese Ausnahme waere ein
+# vollkommen richtiger Aufruf am Geraet unbenutzbar.
+#
+# ZUSAMMENHANG MIT DEM CONDITION-REGISTER
+# ---------------------------------------
+# Fehlt an der eingestellten PLL-Quelle das Signal, meldet das Geraet Bit 7
+# des Condition-Registers. Der Treiber kennt dieses Bit laengst - es steht als
+# "Condition Bit 7 (PLLE): kein Signal an der PLL-Quelle" in
+# wt3000_common._CONDITION_BITS und geht ueber 'wt.log_condition()' ins
+# Protokoll. Wer 'set_pll_source()' benutzt, hat die Gegenprobe also schon.
+
+
+class FrequencyBand(Enum):
+    """Messbandbreite der Oberschwingungsanalyse (':HARMonics:FBANd')."""
+
+    NORMAL = "NORMal"
+    WIDE = "WIDE"
+
+
+class ThdFormula(Enum):
+    """Bezugsgroesse der Klirrfaktorrechnung (':HARMonics:THD').
+
+    TOTAL        bezogen auf den Gesamteffektivwert aller gemessenen Ordnungen
+    FUNDAMENTAL  bezogen auf die Grundschwingung
+    """
+
+    TOTAL = "TOTal"
+    FUNDAMENTAL = "FUNDamental"
+
+
+class IecGrouping(Enum):
+    """Gruppierung der IEC-Oberschwingungsmessung (Handbuch 6-57)."""
+
+    OFF = "OFF"
+    TYPE1 = "TYPE1"
+    TYPE2 = "TYPE2"
+
+
+FBAND_TOKENS: frozenset[str] = frozenset(b.value.upper() for b in FrequencyBand)
+THD_TOKENS: frozenset[str] = frozenset(f.value.upper() for f in ThdFormula)
+GROUPING_TOKENS: frozenset[str] = frozenset(g.value for g in IecGrouping)
+
+#: PLL-Quellen ohne Elementbezug (Handbuch 6-58).
+PLL_FIXED_SOURCES: frozenset[str] = frozenset({"EXTERNAL", "SAMPLE"})
+
+#: Grenzen von ':HARMonics:ORDer' (Handbuch 6-57).
+ORDER_MIN_CHOICES: tuple[int, ...] = (0, 1)
+ORDER_MAX_LIMIT: int = 100
+
+_NODE_FBAND: str = ":HARMonics:FBANd"
+_NODE_ORDER: str = ":HARMonics:ORDer"
+_NODE_PLLSOURCE: str = ":HARMonics:PLLSource"
+_NODE_PLLWARNING: str = ":HARMonics:PLLWarning:STATe"
+_NODE_THD: str = ":HARMonics:THD"
+_NODE_IEC_OBJECT: str = ":HARMonics:IEC:OBJect"
+_NODE_IEC_UGROUPING: str = ":HARMonics:IEC:UGRouping"
+_NODE_IEC_IGROUPING: str = ":HARMonics:IEC:IGRouping"
+
+#: Gruppe fuer die Schreibsperre der Oberschwingungsanalyse.
+GROUP_HARMONICS: str = "HARMONICS"
+
+
+@dataclass(frozen=True)
+class HarmonicsSettings:
+    """Momentaufnahme der Oberschwingungsgruppe."""
+
+    band: FrequencyBand
+    order_min: int
+    order_max: int
+    pll_source: str
+    pll_warning: bool
+    thd: ThdFormula
+    iec_object: str
+    iec_voltage_grouping: IecGrouping
+    iec_current_grouping: IecGrouping
+
+    def describe(self) -> list[str]:
+        """Als Zeilenliste fuer Protokoll und Konsole."""
+        return [
+            f"Oberschwingungen: Ordnung {self.order_min}..{self.order_max}, "
+            f"Bandbreite {self.band.value}",
+            f"  PLL-Quelle:  {self.pll_source}"
+            + ("    (Warnung ein)" if self.pll_warning else "    (Warnung aus)"),
+            f"  THD-Bezug:   {self.thd.value}",
+            f"  IEC:         Objekt {self.iec_object}, "
+            f"U-Gruppierung {self.iec_voltage_grouping.value}, "
+            f"I-Gruppierung {self.iec_current_grouping.value}",
+        ]
+
+
+def parse_order(response: str) -> tuple[int, int]:
+    """Antwort auf ':HARMonics:ORDer?' als (min, max) lesen. '1,100' -> (1, 100)."""
+    text = strip_response_header(response)
+    parts = [teil.strip() for teil in text.split(",")]
+    if len(parts) != 2:
+        raise WTError(f"Kein Ordnungspaar in der Antwort {response!r}")
+    try:
+        return int(float(parts[0])), int(float(parts[1]))
+    except ValueError as exc:
+        raise WTError(f"Ordnungspaar {text!r} enthaelt keine Zahlen") from exc
+
+
+class HarmonicsConfig:
+    """Lesen und (gesichertes) Einstellen der Oberschwingungsanalyse.
+
+    Dieselbe doppelte Sperre wie bei den anderen Gruppen dieses Moduls; eine
+    zusaetzlich geschuetzte Gruppe gibt es nicht, weil kein Kommando hier
+    Messwerte verwirft.
+
+    OPTIONSPFLICHT: Die Gruppe antwortet nur mit '/G5' oder '/G6'. Die Fassade
+    prueft das beim Zugriff auf 'wt.harmonics' und wirft sonst eine WTError,
+    die die fehlende Option benennt - statt eines Timeouts, der wie ein
+    Verbindungsabbruch aussieht. Wer die Klasse von Hand baut, hat diese
+    Pruefung nicht; das ist gewollt, denn dieses Modul kennt den Steckbrief
+    nicht.
+
+    Zum Auslesen gehoert wie bei der Integration ein Messprofil:
+    'wt3000_measure.build_harmonics_profile()' liefert die Summengroessen
+    (UTHD, ITHD, PTHD) und die Einzelordnungen ueber den <Order>-Parameter der
+    Item-Tabelle, den 'ItemSpec' laengst vorsieht.
+    """
+
+    def __init__(
+        self,
+        session: WTSession,
+        allow_changes: bool = False,
+        elements: tuple[int, ...] = DEFAULT_ELEMENTS,
+        sigma_units: tuple[str, ...] = ("SIGMA", "SIGMB"),
+        verify: bool = True,
+        check_errors: bool = True,
+    ) -> None:
+        self._session = session
+        self._allow_changes = allow_changes
+        self._elements = tuple(elements)
+        self._sigma_units = tuple(unit.strip().upper() for unit in sigma_units)
+        self._verify = verify
+        self._check_errors = check_errors
+
+    # -- Sperre und Basisoperationen ---------------------------------------
+
+    @property
+    def allow_changes(self) -> bool:
+        """True, wenn dieses Objekt schreiben darf."""
+        return self._allow_changes
+
+    @property
+    def elements(self) -> tuple[int, ...]:
+        """Die bestueckten Elemente, gegen die Parameter geprueft werden."""
+        return self._elements
+
+    def _require_writable(self) -> None:
+        if not self._allow_changes:
+            raise ConfigLocked(
+                "Schreibzugriff auf die Oberschwingungsanalyse abgelehnt: "
+                "HarmonicsConfig wurde mit allow_changes=False erzeugt."
+            )
+
+    def _query(self, node: str) -> str:
+        return strip_response_header(self._session.query(f"{node}?"))
+
+    def _write(
+        self,
+        command: str,
+        query_node: str,
+        matches: Callable[[str], bool],
+        label: str,
+    ) -> None:
+        """Senden, zuruecklesen, Fehlerqueue pruefen - wie in den Nachbarklassen."""
+        self._require_writable()
+        _log.info("SET %s", command)
+        self._session.write(command)
+
+        if self._verify:
+            actual = self._query(query_node)
+            if not matches(actual):
+                raise WTError(f"{label}: Geraet meldet {actual!r} nach '{command}'")
+            _log.info("  verifiziert: %s = %s", query_node, actual)
+
+        if self._check_errors:
+            self._session.assert_no_error(label)
+
+    # =======================================================================
+    # Bandbreite, Ordnungen, THD
+    # =======================================================================
+
+    def band(self) -> FrequencyBand:
+        """Messbandbreite (':HARMonics:FBANd')."""
+        token = canonical_enum_token(self._query(_NODE_FBAND), FBAND_TOKENS)
+        for kind in FrequencyBand:
+            if kind.value.upper() == token:
+                return kind
+        raise WTError(f"Unbekannte Messbandbreite {token!r}; erwartet: NORMal, WIDE")
+
+    def set_band(self, band: FrequencyBand | str) -> None:
+        """Messbandbreite setzen. NORMal oder WIDE."""
+        token = band.value if isinstance(band, FrequencyBand) else str(band)
+        if canonical_enum_token(token, FBAND_TOKENS) not in FBAND_TOKENS:
+            raise WTError(f"Messbandbreite {band!r} unzulaessig; erlaubt: NORMal, WIDE")
+        self._write(
+            f"{_NODE_FBAND} {token}",
+            _NODE_FBAND,
+            lambda actual: enum_match(token, actual, FBAND_TOKENS),
+            "Messbandbreite setzen",
+        )
+
+    def order_range(self) -> tuple[int, int]:
+        """Gemessener Ordnungsbereich als (min, max)."""
+        return parse_order(self._query(_NODE_ORDER))
+
+    def set_order_range(self, minimum: int, maximum: int) -> None:
+        """Ordnungsbereich setzen (Handbuch 6-57).
+
+        Zulaessig sind laut Handbuch nur 0 oder 1 als Minimum - 0 nimmt den
+        Gleichanteil mit, 1 beginnt bei der Grundschwingung - und 1 bis 100
+        als Maximum. Beides wird hier geprueft, bevor gesendet wird: eine
+        Ordnung 150 waere sonst ein Eintrag in der Fehlerqueue und der
+        Ordnungsbereich stuende danach unbestimmt da.
+        """
+        if minimum not in ORDER_MIN_CHOICES:
+            raise WTError(
+                f"Minimale Ordnung {minimum} unzulaessig; erlaubt ist "
+                f"{' oder '.join(str(w) for w in ORDER_MIN_CHOICES)} "
+                "(0 nimmt den Gleichanteil mit)"
+            )
+        if not 1 <= maximum <= ORDER_MAX_LIMIT:
+            raise WTError(
+                f"Maximale Ordnung {maximum} liegt ausserhalb 1..{ORDER_MAX_LIMIT}"
+            )
+        # Eine Pruefung auf "Maximum unter Minimum" steht hier bewusst NICHT:
+        # das Minimum ist 0 oder 1, das Maximum mindestens 1 - ein leerer
+        # Bereich ist mit diesen beiden Grenzen nicht bildbar. Der Zweig waere
+        # unerreichbar und taeuschte eine Pruefung vor, die es nicht gibt.
+        ziel = (minimum, maximum)
+        self._write(
+            f"{_NODE_ORDER} {minimum},{maximum}",
+            _NODE_ORDER,
+            lambda actual: parse_order(actual) == ziel,
+            "Ordnungsbereich setzen",
+        )
+
+    def thd_formula(self) -> ThdFormula:
+        """Bezugsgroesse der Klirrfaktorrechnung."""
+        token = canonical_enum_token(self._query(_NODE_THD), THD_TOKENS)
+        for kind in ThdFormula:
+            if kind.value.upper() == token:
+                return kind
+        raise WTError(f"Unbekannte THD-Formel {token!r}; erwartet: TOTal, FUNDamental")
+
+    def set_thd_formula(self, formula: ThdFormula | str) -> None:
+        """THD-Bezug setzen: Gesamteffektivwert (TOTal) oder Grundschwingung."""
+        token = formula.value if isinstance(formula, ThdFormula) else str(formula)
+        if canonical_enum_token(token, THD_TOKENS) not in THD_TOKENS:
+            raise WTError(
+                f"THD-Formel {formula!r} unzulaessig; erlaubt: TOTal, FUNDamental"
+            )
+        self._write(
+            f"{_NODE_THD} {token}",
+            _NODE_THD,
+            lambda actual: enum_match(token, actual, THD_TOKENS),
+            "THD-Formel setzen",
+        )
+
+    # =======================================================================
+    # PLL-Quelle
+    # =======================================================================
+
+    def pll_source(self) -> str:
+        """Eingestellte PLL-Quelle, z.B. 'U1', 'I3', 'EXTERNAL'.
+
+        Die Oberschwingungsanalyse synchronisiert sich auf diese Quelle. Fehlt
+        dort das Signal, meldet das Geraet Bit 7 des Condition-Registers
+        (PLLE) - 'wt.log_condition()' schreibt das ins Protokoll.
+        """
+        return strip_response_header(self._query(_NODE_PLLSOURCE)).upper()
+
+    def set_pll_source(self, source: str) -> None:
+        """PLL-Quelle setzen: 'U<x>', 'I<x>', 'EXTernal' oder 'SAMPle'.
+
+        DIE AUSNAHME BEIM ZURUECKLESEN: Fuer 'SAMPle' sagt das Handbuch
+        (6-58) ausdruecklich, dass das Geraet ausserhalb der Breitbandmessung
+        stattdessen 'EXTernal' verwendet UND auf eine Abfrage auch
+        'EXTernal' zurueckmeldet. Die Rueckleseprobe wuerde das sonst als
+        Abweichung melden und einen vollkommen richtigen Aufruf unbenutzbar
+        machen. Beide Antworten gelten hier deshalb als Erfolg - und ein
+        Protokolleintrag sagt, dass das Geraet die Quelle umgedeutet hat,
+        damit es niemandem still passiert.
+        """
+        token = self._canonical_pll_source(source)
+        erlaubt = {token, "EXTERNAL"} if token == "SAMPLE" else {token}
+
+        def _matches(actual: str) -> bool:
+            gemeldet = strip_response_header(actual).strip().upper()
+            if token == "SAMPLE" and gemeldet == "EXTERNAL":
+                _log.info(
+                    "PLL-Quelle SAMPle wird vom Geraet als EXTernal gefuehrt - "
+                    "laut Handbuch 6-58 der Normalfall ausserhalb der "
+                    "Breitbandmessung, kein Fehler"
+                )
+            return gemeldet in erlaubt
+
+        self._write(
+            f"{_NODE_PLLSOURCE} {source}",
+            _NODE_PLLSOURCE,
+            _matches,
+            "PLL-Quelle setzen",
+        )
+
+    def _canonical_pll_source(self, source: str) -> str:
+        token = str(source).strip().upper()
+        canonical = canonical_enum_token(token, frozenset(PLL_FIXED_SOURCES))
+        if canonical in PLL_FIXED_SOURCES:
+            return canonical
+        if len(token) >= 2 and token[0] in {"U", "I"} and token[1:].isdigit():
+            self._require_element(int(token[1:]), f"PLL-Quelle {source!r}")
+            return token
+        raise WTError(
+            f"PLL-Quelle {source!r} unzulaessig; erlaubt: U<x>, I<x>, EXTernal, SAMPle"
+        )
+
+    def pll_warning(self) -> bool:
+        """Warnt das Geraet, wenn an der PLL-Quelle kein Signal anliegt?"""
+        return parse_boolean(self._query(_NODE_PLLWARNING), _NODE_PLLWARNING)
+
+    def set_pll_warning(self, enabled: bool) -> None:
+        """PLL-Warnmeldung schalten. Laut Handbuch nur im Breitbandmodus wirksam."""
+        self._write(
+            f"{_NODE_PLLWARNING} {'ON' if enabled else 'OFF'}",
+            _NODE_PLLWARNING,
+            lambda actual: parse_boolean(actual, _NODE_PLLWARNING) is enabled,
+            "PLL-Warnung schalten",
+        )
+
+    # =======================================================================
+    # IEC-Teil
+    # =======================================================================
+
+    def iec_object(self) -> str:
+        """Messobjekt der IEC-Messung, z.B. 'ELEMENT1' oder 'SIGMA'."""
+        return strip_response_header(self._query(_NODE_IEC_OBJECT)).upper()
+
+    def set_iec_object(self, target: str | int) -> None:
+        """Messobjekt setzen: Elementnummer, 'ELEMent<x>', 'SIGMA' oder 'SIGMB'.
+
+        Eine Zahl wird als Element gelesen: 'set_iec_object(2)' entspricht
+        'ELEMent2'. Geprueft wird gegen die bestueckte Elementliste und - bei
+        SIGMA/SIGMB - gegen die Wiring-Units, die die Fassade hineinreicht.
+        """
+        token = self._canonical_iec_object(target)
+        self._write(
+            f"{_NODE_IEC_OBJECT} {token}",
+            _NODE_IEC_OBJECT,
+            lambda actual: strip_response_header(actual).strip().upper() == token,
+            "IEC-Messobjekt setzen",
+        )
+
+    def _canonical_iec_object(self, target: str | int) -> str:
+        if isinstance(target, int):
+            self._require_element(target, f"IEC-Messobjekt {target!r}")
+            return f"ELEMENT{target}"
+        token = str(target).strip().upper()
+        if token in {"SIGMA", "SIGMB"}:
+            if token not in self._sigma_units:
+                raise WTError(
+                    f"Wiring-Unit {token} gibt es bei dieser Verdrahtung nicht "
+                    f"(vorhanden: {', '.join(self._sigma_units) or 'keine'})"
+                )
+            return token
+        if token.startswith("ELEMENT") and token[len("ELEMENT"):].isdigit():
+            self._require_element(
+                int(token[len("ELEMENT"):]), f"IEC-Messobjekt {target!r}"
+            )
+            return token
+        if token.isdigit():
+            self._require_element(int(token), f"IEC-Messobjekt {target!r}")
+            return f"ELEMENT{int(token)}"
+        raise WTError(
+            f"IEC-Messobjekt {target!r} unzulaessig; erlaubt: ELEMent<x>, SIGMA, SIGMB"
+        )
+
+    def iec_grouping(self, quantity: str = "U") -> IecGrouping:
+        """Gruppierung der IEC-Messung fuer Spannung ('U') oder Strom ('I')."""
+        node = self._grouping_node(quantity)
+        token = canonical_enum_token(self._query(node), GROUPING_TOKENS)
+        try:
+            return IecGrouping(token)
+        except ValueError as exc:
+            raise WTError(f"Unbekannte IEC-Gruppierung {token!r}") from exc
+
+    def set_iec_grouping(self, quantity: str, grouping: IecGrouping | str) -> None:
+        """Gruppierung setzen: OFF, TYPE1 oder TYPE2 (Handbuch 6-57)."""
+        node = self._grouping_node(quantity)
+        token = grouping.value if isinstance(grouping, IecGrouping) else str(grouping)
+        canonical = canonical_enum_token(token, GROUPING_TOKENS)
+        if canonical not in GROUPING_TOKENS:
+            raise WTError(
+                f"IEC-Gruppierung {grouping!r} unzulaessig; erlaubt: OFF, TYPE1, TYPE2"
+            )
+        self._write(
+            f"{node} {canonical}",
+            node,
+            lambda actual: enum_match(canonical, actual, GROUPING_TOKENS),
+            "IEC-Gruppierung setzen",
+        )
+
+    @staticmethod
+    def _grouping_node(quantity: str) -> str:
+        token = str(quantity).strip().upper()
+        if token in {"U", "VOLTAGE", "SPANNUNG"}:
+            return _NODE_IEC_UGROUPING
+        if token in {"I", "CURRENT", "STROM"}:
+            return _NODE_IEC_IGROUPING
+        raise WTError(
+            f"Groesse {quantity!r} unbekannt; erlaubt ist 'U' (Spannung) oder "
+            "'I' (Strom)"
+        )
+
+    # =======================================================================
+    # Momentaufnahme
+    # =======================================================================
+
+    def capture(self) -> HarmonicsSettings:
+        """Vollstaendige Momentaufnahme der Gruppe."""
+        order_min, order_max = self.order_range()
+        return HarmonicsSettings(
+            band=self.band(),
+            order_min=order_min,
+            order_max=order_max,
+            pll_source=self.pll_source(),
+            pll_warning=self.pll_warning(),
+            thd=self.thd_formula(),
+            iec_object=self.iec_object(),
+            iec_voltage_grouping=self.iec_grouping("U"),
+            iec_current_grouping=self.iec_grouping("I"),
+        )
+
+    def restore(self, settings: HarmonicsSettings) -> None:
+        """Eine Momentaufnahme zurueckschreiben - Vorlage fuer M2-4."""
+        self.set_band(settings.band)
+        self.set_order_range(settings.order_min, settings.order_max)
+        self.set_pll_source(settings.pll_source)
+        self.set_pll_warning(settings.pll_warning)
+        self.set_thd_formula(settings.thd)
+        self.set_iec_object(settings.iec_object)
+        self.set_iec_grouping("U", settings.iec_voltage_grouping)
+        self.set_iec_grouping("I", settings.iec_current_grouping)
+
+    def log_summary(self) -> None:
+        """Momentaufnahme ins Protokoll schreiben."""
+        for line in self.capture().describe():
+            _log.info("%s", line)
 
     def _require_element(self, element: int, was: str) -> None:
         """Elementnummer gegen die bestueckte Liste halten."""

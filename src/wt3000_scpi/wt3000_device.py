@@ -59,7 +59,7 @@ from .wt3000_common import (
 )
 from .wt3000_core import TmctlTransport, Transport, WTConfig, WTError, WTSession
 # NEU (M3-2/M2-1): die Geraetegruppen jenseits von ':INPut' und ':NUMeric'.
-from .wt3000_deviceconfig import ComputationConfig, IntegrationConfig
+from .wt3000_deviceconfig import ComputationConfig, HarmonicsConfig, IntegrationConfig
 from .wt3000_input import InputConfig, WiringUnit
 from .wt3000_itemspec import (
     ItemSpec,
@@ -75,6 +75,7 @@ from .wt3000_measure import (
     LoopStatistics,
     NumericHold,
     SampleSink,
+    build_harmonics_profile,
     build_integration_profile,
     build_standard_profile,
     run_measurement_loop,
@@ -518,6 +519,18 @@ class ItemAccess:
         return ItemTable.read_from_device(self._session)
 
     @staticmethod
+    def harmonics_profile(
+        orders: tuple[int, ...] = (1, 3, 5, 7, 9, 11, 13),
+        elements: tuple[str, ...] = ("1", "2", "3"),
+    ) -> tuple[ItemSpec, ...]:
+        """Messprofil fuer eine Oberschwingungsmessung.
+
+        Das Gegenstueck zu 'wt.harmonics': jene Klasse stellt die Analyse ein,
+        dieses Profil macht ihr Ergebnis lesbar.
+        """
+        return build_harmonics_profile(orders, elements)
+
+    @staticmethod
     def integration_profile() -> tuple[ItemSpec, ...]:
         """Messprofil fuer eine Wh-/Ah-Messung (TIME, WH, AH, ... je Element).
 
@@ -908,6 +921,7 @@ class WT3000:
         self._measure: MeasureControl | None = None
         self._integration: IntegrationConfig | None = None
         self._computation: ComputationConfig | None = None
+        self._harmonics: HarmonicsConfig | None = None
 
     # -- Erzeugen -----------------------------------------------------------
 
@@ -1106,6 +1120,33 @@ class WT3000:
                 motor=self._device.is_motor_model,
             )
         return self._computation
+
+    @property
+    def harmonics(self) -> HarmonicsConfig:
+        """Oberschwingungsanalyse (':HARMonics') - Bandbreite, Ordnungen, PLL.
+
+        NEU (ROADMAP M2-1 Punkt 5, Rang 3 der Analyse). Dies ist die ERSTE
+        Stelle im Treiber, an der 'require_option()' aus M1-3 tatsaechlich
+        gebraucht wird: die ganze Gruppe verlangt '/G5' oder '/G6'. Fehlt
+        beides, antwortet das Geraet auf kein einziges Kommando dieser Gruppe -
+        der Query laeuft in den Timeout und die Meldung sieht aus wie ein
+        Verbindungsabbruch. Die Pruefung hier macht daraus einen Satz, der die
+        Ursache benennt.
+
+        Sie steht bewusst in der Fassade und nicht im Fachmodul: 'DeviceInfo'
+        ist Layer 4, 'HarmonicsConfig' Layer 2 - und dort gehoert der
+        Steckbrief nicht hin.
+        """
+        self._require_open()
+        self._device.require_option(":HARMonics")
+        if self._harmonics is None:
+            self._harmonics = HarmonicsConfig(
+                self._session,
+                allow_changes=self._allow_changes,
+                elements=self._device.elements,
+                sigma_units=tuple(self._device.sigma_members),
+            )
+        return self._harmonics
 
     @property
     def measure(self) -> MeasureControl:

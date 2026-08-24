@@ -45,7 +45,7 @@ steuerbaren Langzeitmessung.
 |---|---|---|
 | M0 — Gerätefragen | **teilweise** | ein protokollierter Gerätetermin; Spannungssyntax ist bereits belegt |
 | M1 — Fundament | **teilweise** | M1-3 bis M1-5 |
-| M2 — Konfiguration | **teilweise** | M2-1 zur Hälfte (`:INTEGrate`, `:MEASure`); Parser vereinheitlichen, dann weitere Gruppen |
+| M2 — Konfiguration | **teilweise** | M2-1 zur Hälfte (`:INTEGrate`, `:MEASure`, `:HARMonics`); Parser vereinheitlichen, dann M2-4 |
 | M3 — Messsteuerung | **teilweise** | M3-2 Integration umgesetzt; Sitzungsbesitz entscheiden, danach M3-1 |
 | M4 — Export | **teilweise** | M4-3 Einheiten und Metadaten |
 | M5 — Auslieferung | **teilweise** | CLI, Paketmetadaten und CI |
@@ -181,7 +181,7 @@ verschiebt noch Cleanup verhindert.
 
 ## M2 — Konfiguration lesen und einstellen
 
-### M2-1 — Fehlende Gerätegruppen `L` — **begonnen 2026-08-21**
+### M2-1 — Fehlende Gerätegruppen `L` — **zur Hälfte umgesetzt 2026-08-21**
 
 Das Fachmodul [wt3000_deviceconfig.py](../src/wt3000_scpi/wt3000_deviceconfig.py)
 existiert seit dem 21.08.2026 mit Gettern, Settern, Snapshot (`capture()`) und
@@ -192,13 +192,17 @@ Restore für seine erste Gruppe. Reihenfolge:
    `set_averaging()` / `averaging_disabled()`
 3. [x] **Frequenzmessquelle** — `frequency_item()` / `set_frequency_item()`
 4. [x] **Integration** — umgesetzt, siehe M3-2
-5. Harmonische und optionsabhängige Gruppen — der Optionscheck dafür steht
-   seit M1-3 bereit (`wt.device.supports(":HARMonics")`)
+5. [x] **Harmonische** — `HarmonicsConfig` (`:HARMonics`): Bandbreite,
+   Ordnungsbereich, PLL-Quelle und -Warnung, THD-Bezug, IEC-Objekt und
+   -Gruppierung. Erste Gruppe mit Optionspflicht; die Fassade prüft sie über
+   `DeviceInfo.require_option(":HARMonics")`. Weitere optionsabhängige Gruppen
+   (`:CBCycle`, `:MOTor`) stehen noch aus.
 6. Anzeige und System rein lesend
 
 Mit Punkt 2 und 3 kam die Wirkungsgradgleichung (`:MEASure:EFFiciency:ETA<x>`)
 sowie `SQFormula` und `SYNChronize` dazu — sie runden den Schnappschuss der
-Gruppe ab. Bewusst noch **nicht** enthalten und im Modulkopf einzeln benannt:
+Gruppe ab. Zu jeder schreibbaren Gruppe gehört ein `capture()`/`restore()`-Paar;
+damit steht die Vorlage für M2-4 (`SessionBackup`) bereit. Bewusst noch **nicht** enthalten und im Modulkopf einzeln benannt:
 `:MEASure:FUNCtion<x>` (benutzerdefinierte Ausdrücke), `:PC`, `:DMeasure`,
 `:COMPensation`, `:PHASe`, `:SAMPling`, `:MHOLd`.
 
@@ -395,7 +399,8 @@ Transport        wt3000_transport
 Sitzung/Regeln   wt3000_core, wt3000_common
 
 Fachzugriffe     wt3000_numeric, wt3000_rangeio, wt3000_input
-                 wt3000_deviceconfig   (M2-1, seit 2026-08-21: ':INTEGrate', ':MEASure')
+                 wt3000_deviceconfig   (M2-1, seit 2026-08-21: ':INTEGrate',
+                                        ':MEASure', ':HARMonics')
 
 Abläufe          wt3000_itemspec, wt3000_ranging, wt3000_measure
 Ausgabe          wt3000_sinks

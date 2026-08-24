@@ -246,6 +246,9 @@ gliedert.
 * Der WT3000 wird häufig gerade wegen Oberschwingungsmessung eingesetzt
   (Netzqualität, Normprüfung) — ohne dieses Modul deckt der Treiber einen der
   Hauptanwendungsfälle des Geräts gar nicht ab
+* **Erledigt am 21.08.2026** — `HarmonicsConfig` in
+  [`wt3000_deviceconfig.py`](../src/wt3000_scpi/wt3000_deviceconfig.py), dazu
+  `build_harmonics_profile()` für die Leseseite. Details in Abschnitt 9.
 
 ### 2.4 Flicker-Messung (IEC 61000-3-3)
 * Fehlt vollständig: `:FLICker`-Gruppe (Pst/Plt-Grenzwerte, Editionswahl,
@@ -334,7 +337,7 @@ gliedert.
 | 0 | `*OPT?` in `DeviceInfo` auswerten | keine (Common Command) | Voraussetzung für alle optionsgebundenen Punkte unten — sollte vor Rang 3, 5, 8, 10 stehen, damit keine Arbeit an nicht vorhandener Hardware entsteht | **umgesetzt 2026-08-21** — siehe Abschnitt 6 |
 | 1 | `IntegratorControl` (`:INTEGrate`) — Wh/Ah-Messung steuern | **nein** | Kernfunktion eines Leistungsmessgeräts, heute nicht steuerbar | **umgesetzt 2026-08-21** als `IntegrationConfig` — siehe Abschnitt 7 |
 | 2 | `ComputationConfig` (`:MEASure`, insb. Averaging) | **nein** (außer Delta-Teil, siehe unten) | Betrifft praktisch jede Messung, nicht nur Spezialfälle | **umgesetzt 2026-08-21** (ohne Delta) — siehe Abschnitt 8 |
-| 3 | `HarmonicsConfig` (`:HARMonics`) | **`/G5` oder `/G6`** | Einer der Hauptanwendungsfälle des WT3000 — aber erst nach `*OPT?`-Check angehen | **freigegeben** — `G6` ist verbaut (obwohl `G5` fehlt) |
+| 3 | `HarmonicsConfig` (`:HARMonics`) | **`/G5` oder `/G6`** | Einer der Hauptanwendungsfälle des WT3000 — aber erst nach `*OPT?`-Check angehen | **umgesetzt 2026-08-21** — siehe Abschnitt 9 |
 | 4 | Steuerbares Mess-Objekt + Trigger (`*TRG`/`GET`, `STATus:CONDition?`-Polling auf UPD-Bit) | **nein** | Grundlage für 2.1, 2.6 und robuste Automatisierung; Ereignismechanismus jetzt am Handbuch belegt (Abschnitt 0.2), nicht mehr nur Vermutung | UPD-Polling **widerlegt** (0 Treffer in 3556 Proben) — Weg über EESE/SRQ oder Dublettenerkennung nötig |
 | 5 | `:CBCycle` (zyklus-/ereignisgetriggerte Messung) | **`/CC`** | Für synchrone/getriggerte Anwendungsfälle jenseits der freilaufenden Schleife | **freigegeben** — `CC` ist verbaut, Werksconfig braucht keine externe Verkabelung |
 | 6 | Erweiterter `SessionBackup` (inkl. Averaging/Harmonics/Motor) | folgt den Gruppen, die er sichert | Sicherheitsnetz, sobald 2–3 neue schreibbare Gruppen existieren | unverändert |
@@ -583,3 +586,81 @@ halbfertig mitzunehmen wäre schlechter gewesen, als sie zu benennen.
 
 Wie bei Rang 1 gilt: **die Geräteabnahme steht aus**, jedes Set-Kommando dieser
 Gruppe hängt an M0-3.
+---
+
+## 9 — Umgesetzt: Rang 3, Oberschwingungsanalyse (2026-08-21)
+
+Damit deckt der Treiber den Anwendungsfall ab, wegen dessen der WT3000 häufig
+überhaupt angeschafft wird. `HarmonicsConfig` ist die dritte Gruppe in
+`wt3000_deviceconfig` — wieder ohne eine einzige neue Parserregel.
+
+### Abgedeckt
+
+| Stellgröße | Zugriff |
+|---|---|
+| Messbandbreite (NORMal/WIDE) | `band()`, `set_band()` |
+| Ordnungsbereich (min 0 oder 1, max 1…100) | `order_range()`, `set_order_range()` |
+| PLL-Quelle (`U<x>`, `I<x>`, EXTernal, SAMPle) | `pll_source()`, `set_pll_source()` |
+| PLL-Warnmeldung | `pll_warning()`, `set_pll_warning()` |
+| THD-Bezug (TOTal/FUNDamental) | `thd_formula()`, `set_thd_formula()` |
+| IEC-Messobjekt und -Gruppierung | `iec_object()`, `iec_grouping()`, Setter |
+| Momentaufnahme | `capture()`, `restore()`, `describe()` |
+
+Erreichbar als `wt.harmonics`, das Messprofil über
+`wt.items.harmonics_profile()`.
+
+### Die Optionsprüfung aus Rang 0 wird zum ersten Mal gebraucht
+
+`:HARMonics` ist die erste implementierte Gruppe, die eine Hardwareoption
+verlangt. Fehlt sie, antwortet das Gerät auf **kein** Kommando der Gruppe — der
+Query läuft in den Timeout, und die Meldung sieht aus wie ein
+Verbindungsabbruch. Die Fassade ruft deshalb beim Zugriff auf `wt.harmonics`
+`DeviceInfo.require_option(":HARMonics")` auf. Auf einem Gerät ohne die Option
+liest sich das dann so:
+
+```text
+Kommandogruppe :HARMonics ist an diesem Gerät nicht ansprechbar:
+Option G5 oder G6 fehlt. Modell WT3000, *OPT? -> B5,C7
+```
+
+Die Prüfung sitzt in der Fassade und nicht im Fachmodul: `DeviceInfo` ist
+Layer 4, `HarmonicsConfig` Layer 2. Am eingemessenen Gerät greift sie nicht —
+`/G6` ist verbaut, und **G6 allein genügt**, obwohl `/G5` fehlt.
+
+### Eine Handbuchstelle, die man nicht übersehen darf
+
+Zur PLL-Quelle `SAMPle` steht auf Seite 6-58: außerhalb der Breitbandmessung
+verwendet das Gerät stattdessen `EXTernal` — *und meldet auf eine Abfrage auch
+`EXTernal` zurück*. Die Rückleseprobe dieses Moduls hätte das als Abweichung
+gemeldet und einen vollkommen richtigen Aufruf unbenutzbar gemacht.
+`set_pll_source()` behandelt den Fall ausdrücklich und schreibt einen
+Protokolleintrag, damit die Umdeutung niemandem still passiert. Umgekehrt gilt
+die Nachsicht nicht: wer `EXTernal` setzt und `SAMPle` zurückbekommt, hat ein
+echtes Problem.
+
+### Der Zusammenhang mit dem Condition-Register bestand schon
+
+Fehlt an der eingestellten PLL-Quelle das Signal, meldet das Gerät Bit 7
+(PLLE). Dieses Bit kennt der Treiber seit Längerem — es steht in
+`wt3000_common._CONDITION_BITS` und geht über `wt.log_condition()` ins
+Protokoll. Wer `set_pll_source()` benutzt, hat die Gegenprobe also bereits.
+
+### Die Leseseite brauchte keine neue Maschinerie
+
+`ItemSpec` führt seit jeher ein Feld `order`, und `:NUMeric:NORMal:ITEM<x>`
+nimmt als drittes Glied `{TOTal|DC|<NRf>}` mit NRf = 1…100. Die Einzelordnung
+ist damit ein gewöhnliches Item: `U,1,5` ist die 5. Oberschwingung der Spannung
+an Element 1. `build_harmonics_profile(orders=…, elements=…)` baut daraus ein
+Profil aus Summengrößen (UTHD, ITHD, PTHD, UTHF, ITHF, UTIF, ITIF, HVF, HCF)
+und Einzelordnungen.
+
+Der andere Weg — `:NUMeric:LIST`, das ganze Ordnungslisten auf einmal liefert —
+ist bewusst **nicht** benutzt: er bräuchte einen zweiten Blockleser neben
+`read_numeric_values()`, und diese Analyse führt ihn nicht.
+
+### Offen
+
+Wie bei Rang 1 und 2 die **Geräteabnahme** (M0-3). Nicht enthalten sind die
+optionsabhängigen Nachbargruppen `:CBCycle` (Rang 5, `/CC` verbaut) und
+`:MOTor` (Rang 8, Modellvariante vorhanden) — beide sind freigegeben und
+können demselben Muster folgen.

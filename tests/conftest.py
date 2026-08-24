@@ -487,6 +487,40 @@ def computation_responses(
     }
 
 
+def harmonics_responses(
+    band: str = "NORMAL",
+    order: str = "1,100",
+    pll: str = "U1",
+    pll_warning: str = "1",
+    thd: str = "TOTAL",
+    iec_object: str = "ELEMENT1",
+    ugrouping: str = "OFF",
+    igrouping: str = "OFF",
+) -> dict[str, str]:
+    """Alles, was 'HarmonicsConfig.capture()' abfragt.
+
+    Die Voreinstellungen sind die des Handbuchbeispiels zu ':HARMonics?'
+    (Seite 6-57): FBAND NORMAL, PLLSOURCE U1, ORDER 1,100, THD TOTAL,
+    IEC:OBJECT ELEMENT1, beide Gruppierungen OFF, PLLWARNING 1.
+    """
+    return {
+        ":HARMONICS:FBAND": band,
+        ":HARMONICS:ORDER": order,
+        ":HARMONICS:PLLSOURCE": pll,
+        ":HARMONICS:PLLWARNING:STATE": pll_warning,
+        ":HARMONICS:THD": thd,
+        ":HARMONICS:IEC:OBJECT": iec_object,
+        ":HARMONICS:IEC:UGROUPING": ugrouping,
+        ":HARMONICS:IEC:IGROUPING": igrouping,
+    }
+
+
+@pytest.fixture
+def oberschwingungsantworten() -> dict[str, str]:
+    """Antworttabelle der Oberschwingungsgruppe im Ausgangszustand."""
+    return harmonics_responses()
+
+
 @pytest.fixture
 def rechenantworten() -> dict[str, str]:
     """Antworttabelle der Rechengruppe im Ausgangszustand."""

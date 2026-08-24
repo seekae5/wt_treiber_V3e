@@ -95,6 +95,10 @@ from .wt3000_deviceconfig import (
     ComputationConfig,
     ComputationSettings,
     EfficiencyEquation,
+    FrequencyBand,
+    HarmonicsConfig,
+    HarmonicsSettings,
+    IecGrouping,
     IntegrationConfig,
     IntegrationMode,
     IntegrationSettings,
@@ -102,6 +106,7 @@ from .wt3000_deviceconfig import (
     IntegrationStateError,
     SQFormula,
     SyncMode,
+    ThdFormula,
 )
 from .wt3000_input import (
     ConfigLocked,
@@ -118,6 +123,7 @@ from .wt3000_measure import (
     Sample,
     SampleMark,
     SampleSink,
+    build_harmonics_profile,
     build_integration_profile,
     build_standard_profile,
 )
@@ -168,6 +174,12 @@ __all__ = [
     "EfficiencyEquation",
     "SQFormula",
     "SyncMode",
+    # Oberschwingungen (M2-1)
+    "HarmonicsConfig",
+    "HarmonicsSettings",
+    "FrequencyBand",
+    "ThdFormula",
+    "IecGrouping",
     # Integration (M3-2)
     "IntegrationConfig",
     "IntegrationMode",
@@ -178,6 +190,7 @@ __all__ = [
     # Messprofile
     "build_standard_profile",
     "build_integration_profile",
+    "build_harmonics_profile",
     # Datensatz (M4-1)
     "Sample",
     "SampleMark",

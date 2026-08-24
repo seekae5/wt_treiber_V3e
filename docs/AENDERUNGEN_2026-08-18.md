@@ -340,6 +340,62 @@ Auch hier steht die **Geräteabnahme aus** (M0-3).
 
 ---
 
+## 2026-08-21 — Oberschwingungsanalyse (M2-1, Punkt 5)
+
+### Ein Hauptanwendungsfall, der bisher fehlte
+
+Netzqualität und Normprüfung sind für viele Anwender der Grund, überhaupt einen
+WT3000 zu betreiben; die Analyse führt die Gruppe als Rang 3. Neu ist
+`HarmonicsConfig`: Messbandbreite, Ordnungsbereich, PLL-Quelle und -Warnung,
+THD-Bezug, IEC-Messobjekt und -Gruppierung, dazu `capture()`/`restore()`.
+Erreichbar als `wt.harmonics`. Die dritte Gruppe im Modul, wieder ohne neue
+Parserregel.
+
+### Die Optionsprüfung aus M1-3 wird zum ersten Mal gebraucht
+
+`:HARMonics` verlangt `/G5` oder `/G6`. Fehlt beides, antwortet das Gerät auf
+kein Kommando der Gruppe — der Query läuft in den Timeout und sieht aus wie ein
+Verbindungsabbruch. Die Fassade ruft deshalb beim Zugriff auf `wt.harmonics`
+`DeviceInfo.require_option(":HARMonics")` auf und macht daraus einen Satz, der
+die Ursache benennt. Am eingemessenen Gerät greift sie nicht: `/G6` allein
+genügt.
+
+### Eine Handbuchstelle, die eine Rückleseprobe aushebelt
+
+Zur PLL-Quelle `SAMPle` (Seite 6-58): außerhalb der Breitbandmessung verwendet
+das Gerät `EXTernal` und meldet das auf eine Abfrage auch so zurück. Die
+Rückleseprobe hätte das als Abweichung gemeldet und einen richtigen Aufruf
+unbenutzbar gemacht. `set_pll_source()` behandelt den Fall und protokolliert
+ihn; umgekehrt gilt die Nachsicht nicht.
+
+### Die Leseseite brauchte keine neue Maschinerie
+
+`ItemSpec` führt seit jeher ein Feld `order`, und `:NUMeric:NORMal:ITEM<x>`
+nimmt `{TOTal|DC|<NRf>}` als drittes Glied — `U,1,5` ist die 5. Oberschwingung
+an Element 1. `build_harmonics_profile()` baut daraus Summengrößen und
+Einzelordnungen. `:NUMeric:LIST` bleibt bewusst außen vor: es bräuchte einen
+zweiten Blockleser.
+
+### Beim Testen gefunden und behoben
+
+Eine Prüfung auf „Maximum unter Minimum" im Ordnungsbereich war **unerreichbar**
+(Minimum ist 0 oder 1, Maximum mindestens 1) und täuschte eine Prüfung vor, die
+es nicht gab — entfernt und begründet.
+
+### Prüfung
+
+36 neue Prüfsätze in `tests/test_harmonics.py`.
+
+```text
+pytest: 627 passed
+ruff:   All checks passed
+mypy:   Success: no issues found in 18 source files
+```
+
+**Geräteabnahme steht aus** (M0-3).
+
+---
+
 ## Weitere bereits erledigte Infrastruktur
 
 - `.gitattributes` führt Textdateien einheitlich mit LF und schützt die DLL als binär.

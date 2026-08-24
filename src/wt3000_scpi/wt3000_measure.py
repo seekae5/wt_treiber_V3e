@@ -124,6 +124,88 @@ def build_integration_profile() -> tuple[ItemSpec, ...]:
     return tuple(specs)
 
 
+#: Summengroessen der Oberschwingungsanalyse (Handbuch 6-44, Funktionsliste).
+#
+# UTHD/ITHD/PTHD  Klirrfaktor von Spannung, Strom, Leistung
+# UTHF/ITHF       Telephone Harmonic Factor
+# UTIF/ITIF       Telephone Influence Factor
+# HVF/HCF         Harmonic Voltage/Current Factor
+#
+# Alle verlangen die Rechenoption (/G6) - wie die ganze Gruppe - und KEINE
+# Ordnungsangabe ("Order: Not required"). Sie sind gewoehnliche Items der
+# NORMal-Tabelle, kein Sonderweg.
+HARMONIC_SUMMARY_FUNCTIONS: tuple[str, ...] = (
+    "UTHD",
+    "ITHD",
+    "PTHD",
+    "UTHF",
+    "ITHF",
+    "UTIF",
+    "ITIF",
+    "HVF",
+    "HCF",
+)
+
+
+def build_harmonics_profile(
+    orders: tuple[int, ...] = (1, 3, 5, 7, 9, 11, 13),
+    elements: tuple[str, ...] = ("1", "2", "3"),
+) -> tuple[ItemSpec, ...]:
+    """Messprofil fuer eine Oberschwingungsmessung.
+
+    NEU (ROADMAP M2-1 Punkt 5, Rang 3 der Analyse) - das Gegenstueck zu
+    'HarmonicsConfig' aus wt3000_deviceconfig, genau wie
+    'build_integration_profile()' das Gegenstueck zur Integrationssteuerung
+    ist: jene Klasse stellt die Analyse ein, dieses Profil macht ihr Ergebnis
+    lesbar.
+
+    DASS DAS OHNE NEUE MASCHINERIE GEHT, IST KEIN ZUFALL: 'ItemSpec' fuehrt
+    seit jeher ein Feld 'order', und ':NUMeric:NORMal:ITEM<x>' nimmt als
+    drittes Glied '{TOTal|DC|<NRf>}' mit <NRf> = 1..100 (Handbuch 6-96). Die
+    Einzelordnung einer Groesse ist also ein gewoehnliches Item - 'U,1,5' ist
+    die 5. Oberschwingung der Spannung an Element 1. Der andere Weg,
+    ':NUMeric:LIST', liefert ganze Ordnungslisten auf einmal und ist hier
+    bewusst NICHT benutzt: er braeuchte einen zweiten Blockleser neben
+    'read_numeric_values()', und die Analyse fuehrt ihn nicht.
+
+    Aufbau:
+
+      1. je Element die Summengroessen (ohne Ordnung)
+      2. je Element und Ordnung U, I, P - die eigentliche Ordnungsanalyse
+      3. dazu jeweils der Gesamtwert (TOTal) als Bezug
+
+    'orders' und 'elements' sind Parameter, weil hier - anders als beim
+    Standardprofil - keine sinnvolle feste Wahl existiert: eine Netzqualitaets-
+    pruefung nach EN 61000-3-2 will die ungeraden Ordnungen bis 40, eine
+    Umrichteruntersuchung vielleicht 1..50 lueckenlos. Die Voreinstellung deckt
+    die ungeraden Ordnungen bis 13 ab - der uebliche erste Blick.
+
+    'verify=True' durchgehend: keine dieser Funktionen ist an diesem Geraet je
+    gelesen worden.
+    """
+    if not orders:
+        raise WTError("Ordnungsliste ist leer - ohne Ordnung kein Oberschwingungsprofil")
+    ungueltig = [o for o in orders if not 0 <= o <= 100]
+    if ungueltig:
+        raise WTError(
+            f"Ordnung(en) {ungueltig} liegen ausserhalb 0..100 "
+            "(0 = Gleichanteil, siehe HarmonicsConfig.set_order_range)"
+        )
+
+    specs: list[ItemSpec] = []
+    for element in elements:
+        specs.extend(
+            ItemSpec(f, element, verify=True) for f in HARMONIC_SUMMARY_FUNCTIONS
+        )
+    for element in elements:
+        specs.extend(ItemSpec(f, element, "TOTAL", verify=True) for f in ("U", "I", "P"))
+        for order in orders:
+            specs.extend(
+                ItemSpec(f, element, str(order), verify=True) for f in ("U", "I", "P")
+            )
+    return tuple(specs)
+
+
 # ---------------------------------------------------------------------------
 # Layer 3 - Snapshot ueber :NUMeric:HOLD
 # ---------------------------------------------------------------------------
