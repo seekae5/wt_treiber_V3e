@@ -3,6 +3,8 @@
 # traf auch kuenftige Konfigurationsdateien im Quellbaum.
 messungen/
 konfiguration/
+# NEU: Ablage von tools/hardware/probe_measure_all_elements.py.
+messwerte/
 *.txt
 
 # Python
