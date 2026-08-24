@@ -1,7 +1,7 @@
 # Offene Punkte — geprüfter Stand 2026-08-20
 
 **Projekt:** `wt3000-scpi 0.3.0`  
-**Basis:** aktueller Quellstand, 682 bestandene Tests, Ruff und Mypy ohne Befund  
+**Basis:** aktueller Quellstand, 725 bestandene Tests, Ruff und Mypy ohne Befund  
 **Abgrenzung:** Geräteverhalten ist nur dort als belegt bezeichnet, wo der Bestand
 einen konkreten Geräteversuch dokumentiert.
 
@@ -136,7 +136,8 @@ Vorhanden sind `pyproject.toml`, Test- und Entwicklungsgruppen, Ruff, Mypy,
 - ein Änderungsformat für spätere Releases
 - eine gemeinsame Kommandozeile
 - CI und eine ausgewertete Testabdeckung
-- Einheiten und ein verbindlicher Metadatenverbund für Messdateien
+- ein verbindlicher Metadatenverbund für Messdateien (die Einheiten selbst sind seit
+  dem 25.08.2026 an den Daten)
 
 Diese Punkte gehören zu M4-3 und M5.
 
@@ -155,11 +156,14 @@ Die folgenden Aussagen aus den entfernten Momentaufnahmen sind nicht mehr offen:
 | Blockheader erzeugt nackte `ValueError` | P-4: vollständige Validierung als `ProtocolError` |
 | Installation und Python-Version seien nicht deklariert | `pyproject.toml` mit Python ≥ 3.10 und Abhängigkeitsgruppen ist vorhanden |
 | Verbindungsdaten seien feste Quellcodewerte | P-7: Parameter, Umgebung und JSON-Konfiguration; neutrale Defaults |
-| Tests liefen lokal nicht | Projektumgebung vorhanden; 682 Tests aktuell ausgeführt |
+| Tests liefen lokal nicht | Projektumgebung vorhanden; 725 Tests aktuell ausgeführt |
 | Kein Linting, keine Typprüfung, gemischte Zeilenenden | Ruff, Mypy und `.gitattributes` sind eingerichtet |
 | `wt3000_core.py` enthalte einen großen auskommentierten Transportklon | Kommentarbereinigung abgeschlossen |
 | Export sei fest an CSV gekoppelt | M4-1/M4-2: `Sample`, `SampleSink` und vier Senken |
 | Steckbrief veraltet nach einer Umverdrahtung stillschweigend | M1-3: `refresh_device()`, nach `set_wiring()` automatisch |
+| Rückstellpfad der Messbereiche ist ungetestet | A6: `applied_ranges()` und Umfeld gerätefrei durchgespielt, Abdeckung 60 % → 93 % |
+| Protokollzustand wird nur geprüft, nicht hergestellt | M1-4: `ensured_protocol_state()` mit Rückstellung im `finally` |
+| Messwerte tragen keine Einheiten | M4-3: `unit_of()`, `units` in Metadaten, JSONL und Sidecar; CSV auf Wunsch |
 | `InputConfig` adressiert `ALL` gegen eine feste Elementliste | M1-3: Elementliste aus `DeviceInfo`, Elementnummer geprüft |
 | Schleifentakt und Geräterate seien unverbunden, Dubletten unerkennbar | M3-3: Taktprüfung vorab, `SampleMark.DUPLICATE` während des Laufs, Rate in den Metadaten |
 
@@ -170,7 +174,8 @@ Die folgenden Aussagen aus den entfernten Momentaufnahmen sind nicht mehr offen:
 1. Gerätetermin H-01 bis H-07 mit reproduzierbarem Protokoll
 2. M2-5/S-02, damit neue Konfigurationsgruppen nicht auf einer weiteren
    Parserkopie aufbauen (M1-3/S-01 ist bis auf die Bereichstabellen erledigt)
-3. M1-5/S-03 und S-05 für robuste Fehlerpfade
+3. M1-5/S-03 und S-05 für robuste Fehlerpfade; danach M3-4 (Verbindungsabbruch
+   überleben) — für unbeaufsichtigte Läufe die wichtigste offene Maßnahme
 4. M3-1/S-07 für eine steuerbare Messung
 5. M4-3 und M2-1 für interpretierbare Daten und die fehlenden Gerätegruppen
 

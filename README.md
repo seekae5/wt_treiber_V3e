@@ -16,7 +16,7 @@ Python ≥ 3.10 · keine Laufzeitabhängigkeiten · Version 0.3.0 · **experimen
 | **Messung aufzeichnen** — blockierende Schleife mit HOLD-Anker, Zeitstempel, CSV; Takt gegen `:RATE` geprüft, Wiederholungen als `DUPLICATE` gekennzeichnet | einfach, aber tragfähig |
 | **Gerätekonfiguration jenseits von `:INPut`** — Averaging, Integration, Oberschwingungen, Setup-Speicher | fehlt |
 | **Steuerbare Messung** — `start()`/`stop()`, Gerätesteuerung, Taktung am Gerät | fehlt |
-| **Austauschbarer Export** — andere Formate als CSV, Einheiten an den Daten | fehlt |
+| **Austauschbarer Export** — CSV, JSON Lines, Callback, Mehrfachausgabe; Einheiten an den Daten | weitgehend |
 
 Was noch fehlt und in welcher Reihenfolge es entsteht, steht in [ROADMAP.md](docs/ROADMAP.md).
 
@@ -67,7 +67,7 @@ konfigurierten Werkzeuge laufen ohne Argumente und sind **heute vollständig gr�
 ```bash
 ruff check .    # Stil und ungenutzte Namen (E/F/W, Zeilenlänge 100)
 mypy            # Typprüfung über src/, Zielplattform Windows
-pytest          # 682 Fälle, unter einer Sekunde
+pytest          # 725 Fälle, unter einer Sekunde
 ```
 
 Die Einstellungen stehen in [pyproject.toml](pyproject.toml), jeweils mit Begründung —
@@ -205,6 +205,21 @@ with wt.applied_ranges(plan, backup_file=Path("konfiguration/backup.json")) as r
 
 Für die Item-Tabelle heißt dasselbe `wt.items.applied(specs)`.
 
+**Der Protokollzustand lässt sich herstellen, nicht nur prüfen.** `:COMMunicate:HEADer 0`
+und `:NUMeric:FORMat FLOat` sind Voraussetzung der Binärauswertung. Wer ein Gerät
+vorfindet, an dem jemand am Bedienfeld etwas anderes eingestellt hat, muss deshalb nicht
+mehr abbrechen:
+
+```python
+with wt.ensured_protocol_state() as geändert:
+    ...                       # hier messen
+# Header, Verbose und Zahlenformat stehen wieder wie vorgefunden
+```
+
+Stimmt der Zustand bereits, geht kein einziges Kommando hinaus. In einer rein lesenden
+Sitzung, die etwas ändern müsste, bleibt es beim klaren Abbruch. `record()` ruft den
+Ablauf **nicht** von selbst — er schreibt, und das gehört sichtbar in den Ablauf.
+
 **Der Gerätesteckbrief altert nicht mit.** Verdrahtung, Bestückung und die Zuordnung
 der Wiring-Units werden beim Verbinden gelesen und von `wt.input` und `wt.ranges`
 benutzt. Ändert `wt.input.set_wiring()` die Verdrahtung, frischt die Fassade den
@@ -280,7 +295,7 @@ Für PyCharm liegen fertige Startkonfigurationen unter [.run/](.run).
 ## Tests
 
 ```bash
-pytest                                  # 682 Tests, unter einer Sekunde
+pytest                                  # 725 Tests, unter einer Sekunde
 pytest tests/test_device_facade.py -v   # nur die Fassade
 ```
 

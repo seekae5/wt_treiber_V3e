@@ -331,11 +331,16 @@ def test_zweites_format_ohne_eine_zeile_aenderung_an_der_schleife(tmp_path):
     assert stats.samples == 3
     # Die Schleife hat die Senke in Betrieb genommen und wieder abgeraeumt.
     assert senke.columns == ["U1", "I1", "P1"]
-    # UEBERARBEITET (ROADMAP M3-3): Die Angaben des Aufrufers gehen unveraendert
-    # durch; die Schleife legt die gelesene Geraeterate dazu. Ohne sie laesst
-    # sich in der fertigen Datei nicht beurteilen, ob eine Dublettenzahl
-    # planmaessig war.
-    assert senke.metadata == {"sample_interval_s": 0.0, "update_rate_s": 1.0}
+    # UEBERARBEITET (ROADMAP M3-3/M4-3): Die Angaben des Aufrufers gehen
+    # unveraendert durch; die Schleife legt zwei Dinge dazu, die nur sie
+    # kennt - die gelesene Geraeterate und die Einheiten der Spalten. Ohne
+    # die Rate laesst sich eine Dublettenzahl nicht beurteilen, ohne die
+    # Einheiten die Messwerte nicht.
+    assert senke.metadata == {
+        "sample_interval_s": 0.0,
+        "update_rate_s": 1.0,
+        "units": {"U1": "V", "I1": "A", "P1": "W"},
+    }
     assert senke.geschlossen
     # Und sie hat genau die Datensaetze bekommen, die gemessen wurden.
     assert [s.number for s in senke.samples] == [1, 2, 3]

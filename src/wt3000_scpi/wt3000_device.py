@@ -56,6 +56,7 @@ from types import TracebackType
 from .wt3000_common import (
     DEFAULT_ELEMENTS,
     condition_warnings,
+    parse_boolean,
     parse_condition,
     strip_response_header,
 )
@@ -872,6 +873,9 @@ class MeasureControl:
         parameters: dict | None = None,
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
+        # NEU (ROADMAP M4-3): zweite Kopfzeile mit den Einheiten. Nicht die
+        # Voreinstellung, weil es eine Formataenderung ist - siehe CsvSink.
+        unit_row: bool = False,
     ) -> LoopStatistics:
         """Messschleife in eine CSV schreiben - der haeufigste Fall.
 
@@ -881,7 +885,7 @@ class MeasureControl:
         mit dem Sink-Begriff gar nicht befassen muessen.
         """
         return self.record(
-            CsvSink(csv_path, delimiter=delimiter),
+            CsvSink(csv_path, delimiter=delimiter, unit_row=unit_row),
             table,
             interval_s=interval_s,
             max_samples=max_samples,
@@ -1435,6 +1439,170 @@ class WT3000:
             )
 
         self.log_condition()
+
+    # -- Protokollzustand herstellen ----------------------------------------
+    # NEU (ROADMAP M1-4, Maßnahme A8)
+
+    #: Der Sollzustand: Knoten -> (Sollwert als Parameter, Prueffunktion).
+    #
+    # Reihenfolge ist bedeutsam und deshalb eine Liste, kein dict-Literal zum
+    # Durchlaufen in beliebiger Folge: ':COMMunicate:HEADer 0' steht ZUERST,
+    # weil danach jede weitere Antwort ohne Kopf kommt und die folgenden
+    # Rueckleseproben nicht mehr durch 'strip_response_header()' muessen.
+    # Beim Zuruecknehmen gilt genau die umgekehrte Folge, siehe unten.
+    PROTOCOL_TARGETS: tuple[tuple[str, str], ...] = (
+        (":COMMunicate:HEADer", "0"),
+        # Volle Ausschreibung der Antworten. Die Parser dieses Pakets kommen
+        # mit beidem zurecht ('FLO' wird per startswith geprueft) - der Knoten
+        # steht hier, weil ein Geraet mit VERBose ON Aufzaehlungsantworten
+        # anders schreibt und kuenftige Parser das nicht ahnen muessen sollen.
+        (":COMMunicate:VERBose", "0"),
+        (":NUMeric:FORMat", "FLOat"),
+    )
+
+    def protocol_state(self) -> dict[str, str]:
+        """Ist-Zustand der drei Protokollknoten lesen. Veraendert nichts.
+
+        NEU (ROADMAP M1-4). Die Antworten werden durch
+        'strip_response_header()' geschickt, denn genau der Fall, um den es
+        hier geht - ':COMMunicate:HEADer' steht auf 1 - laesst das Geraet
+        ':COMMUNICATE:HEADER 1' statt '1' antworten (Handbuch IM WT3001E-17EN,
+        Seite 6-24).
+        """
+        self._require_open()
+        return {
+            node: strip_response_header(self._session.query(f"{node}?"))
+            for node, _soll in self.PROTOCOL_TARGETS
+        }
+
+    @contextmanager
+    def ensured_protocol_state(self) -> Iterator[dict[str, str]]:
+        """Sollzustand herstellen, Block ausfuehren, Ausgangszustand zurueck.
+
+        NEU (ROADMAP M1-4). Bis hierher konnte 'check_protocol_state()' den
+        Sollzustand nur PRUEFEN. Wer ein Geraet vorfand, an dem jemand am
+        Bedienfeld ':COMMunicate:HEADer 1' eingestellt hatte, bekam einen
+        klaren Abbruch - und keinen Weg, weiterzuarbeiten, obwohl der Treiber
+        die Ursache mit einem einzigen Kommando selbst beheben koennte. Fuer
+        einen automatisierten Lauf war das eine haeufige und vermeidbare
+        Abbruchursache.
+
+            with WT3000.connect(read_only=False, allow_changes=True) as wt:
+                with wt.ensured_protocol_state() as geaendert:
+                    wt.measure.record_csv(pfad, wt.items.read())
+            # Header, Verbose und Zahlenformat stehen wieder wie vorgefunden
+
+        Der Rueckgabewert nennt die tatsaechlich veraenderten Knoten mit ihrem
+        vorherigen Wert; ein leeres Dictionary heisst "es war schon richtig".
+
+        NUR-LESEN-SITZUNGEN. Stimmt der Zustand bereits, laeuft der Block
+        unveraendert durch - eine lesende Sitzung an einem richtig
+        eingestellten Geraet braucht diese Methode nicht zu fuerchten. Muesste
+        etwas geaendert werden, bleibt es beim klaren Abbruch: das Herstellen
+        ist ein Set-Kommando, und die Nur-Lesen-Zusage steht hoeher als die
+        Bequemlichkeit.
+
+        REIHENFOLGE. Hergestellt wird in der Reihenfolge von
+        PROTOCOL_TARGETS (Header zuerst), zurueckgenommen in der umgekehrten.
+        Der Grund ist derselbe wie beim Herstellen: solange ':COMMunicate:HEADer'
+        noch auf 0 steht, kommen die Rueckleseproben der uebrigen Knoten ohne
+        Kopf. Wuerde der Header zuerst zurueckgestellt, muessten alle folgenden
+        Pruefungen wieder mit Koepfen rechnen - moeglich, aber ohne Not.
+
+        BEWUSST NICHT AUTOMATISCH. 'record()' ruft diese Methode nicht von
+        selbst. Sie schreibt, und ein Messaufruf, der unangekuendigt am
+        Geraetezustand dreht, waere das Gegenteil dessen, wofuer die beiden
+        Schloesser dieses Treibers da sind. Der Aufruf gehoert in den Ablauf,
+        sichtbar und einmal.
+        """
+        self._require_open()
+        ist = self.protocol_state()
+
+        zu_aendern = [
+            (node, soll, ist[node])
+            for node, soll in self.PROTOCOL_TARGETS
+            if not self._protocol_state_ok(node, ist[node])
+        ]
+
+        if not zu_aendern:
+            _log.info("Protokollzustand ist bereits der geforderte")
+            yield {}
+            return
+
+        benennung = ", ".join(
+            f"{node} ist {alt!r}, soll {soll!r}" for node, soll, alt in zu_aendern
+        )
+        if self._read_only:
+            raise WTError(
+                f"Protokollzustand weicht ab ({benennung}), und diese Sitzung ist "
+                "rein lesend. Herstellen verlangt eine Sitzung mit read_only=False - "
+                "oder den Knoten am Bedienfeld richtigstellen."
+            )
+
+        _log.warning("Protokollzustand wird hergestellt: %s", benennung)
+        geaendert: dict[str, str] = {}
+        try:
+            for node, soll, alt in zu_aendern:
+                self._write_protocol_node(node, soll)
+                geaendert[node] = alt
+            yield geaendert
+        finally:
+            # Rueckwaerts, und im finally - also auch bei Fehler und Strg+C.
+            # Ein Fehlschlag hier kommt als Ausnahme heraus, genau wie bei
+            # 'ItemAccess.applied()' und 'applied_ranges()': wer diesen Block
+            # ohne Ausnahme verlaesst, soll sich auf den Ausgangszustand
+            # verlassen duerfen.
+            for node, _soll, alt in reversed(zu_aendern):
+                if node in geaendert:
+                    self._write_protocol_node(node, alt)
+            _log.info("Protokollzustand zurueckgestellt: %s", ", ".join(geaendert))
+
+    # Zwei Vergleiche, die nicht dasselbe sind - der erste Entwurf hat sie
+    # verwechselt und ist daran gescheitert, den Ausgangszustand ':NUMeric:
+    # FORMat ASCii' zurueckzustellen: die Rueckleseprobe fragte "ist es FLOat?"
+    # statt "ist es das, was ich eben geschrieben habe?".
+    #
+    #   _protocol_state_ok  Genuegt der Ist-Zustand dem Treiber? Kennt nur eine
+    #                       richtige Antwort und wird beim Erheben benutzt.
+    #   _readback_matches   Steht am Knoten, was gerade gesendet wurde? Muss in
+    #                       BEIDE Richtungen funktionieren, also auch fuer den
+    #                       Weg zurueck auf einen Wert, den der Treiber selbst
+    #                       nie einstellen wuerde.
+
+    @staticmethod
+    def _protocol_state_ok(node: str, ist: str) -> bool:
+        """Genuegt der vorgefundene Wert dem Sollzustand des Treibers?"""
+        if node == ":NUMeric:FORMat":
+            return ist.upper().startswith("FLO")
+        try:
+            return parse_boolean(ist, node) is False
+        except WTError:
+            return False
+
+    @staticmethod
+    def _readback_matches(gesendet: str, zurueck: str) -> bool:
+        """Rueckleseprobe: meint die Antwort denselben Wert wie das Kommando?
+
+        Zwei Schreibweisen sind zu verkraften. Boolesche Knoten nehmen 'ON'
+        entgegen und antworten '1'. Aufzaehlungen nehmen die Langform 'FLOat'
+        entgegen und antworten je nach ':COMMunicate:VERBose' 'FLOAT' oder
+        'FLO' - deshalb der Vergleich ueber die dreistellige SCPI-Kurzform,
+        die fuer 'ASCii' und 'FLOat' eindeutig ist (Handbuch 7-794).
+        """
+        try:
+            return parse_boolean(gesendet) is parse_boolean(zurueck)
+        except WTError:
+            return gesendet.strip().upper()[:3] == zurueck.strip().upper()[:3]
+
+    def _write_protocol_node(self, node: str, value: str) -> None:
+        """Einen Protokollknoten setzen und zuruecklesen."""
+        self._session.write(f"{node} {value}")
+        zurueck = strip_response_header(self._session.query(f"{node}?"))
+        if not self._readback_matches(value, zurueck):
+            raise WTError(
+                f"{node} liess sich nicht auf {value!r} stellen - zurueckgelesen "
+                f"{zurueck!r}. Fehlerqueue: {self._session.read_error_queue()}"
+            )
 
     def log_condition(self) -> int:
         """':STATus:CONDition?' auswerten und Auffaelligkeiten protokollieren."""

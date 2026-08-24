@@ -492,6 +492,11 @@ def write_metadata(
         "parameters": parameters,
         "device": device,
         "item_table": table.to_dict(),
+        # NEU (ROADMAP M4-3, Maßnahme A5): Spaltenname -> Einheit, aus
+        # derselben Item-Tabelle wie die Spalten selbst. 'null' heisst
+        # "Einheit dieser Funktion nicht belegt" und ist von "dimensionslos"
+        # (leere Zeichenkette) unterschieden.
+        "units": table.unit_map(),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     _log.info("Metadaten gesichert nach %s", path)
@@ -708,6 +713,12 @@ def run_measurement_loop(
     nicht zu beurteilen: erst das Verhaeltnis von Takt zu Rate sagt, ob 40
     Dubletten der Plan waren oder ein Befund.
 
+    NEU (ROADMAP M4-3): Ebenso gehen die EINHEITEN mit hinaus, unter 'units'
+    als Abbildung Spaltenname -> Einheit. Sie stammen aus derselben
+    Item-Tabelle wie die Spaltennamen; ein Wert 'null' heisst "Einheit dieser
+    Funktion nicht belegt" und ist von "dimensionslos" (leere Zeichenkette)
+    unterschieden - siehe FUNCTION_UNITS in wt3000_numeric.py.
+
     OFFEN (ROADMAP M3-1): Diese Funktion wird der Rumpf der Klasse
     'Measurement'. Drei Stellen sind dabei anzupassen und nicht bloss zu
     verschieben:
@@ -757,6 +768,10 @@ def run_measurement_loop(
     # selbst gesetzt hat - seine Angabe ist die aeltere Zusage.
     ausgabe_metadaten: dict[str, object] = dict(metadata or {})
     ausgabe_metadaten.setdefault("update_rate_s", stats.update_rate_s)
+    # NEU (ROADMAP M4-3, Maßnahme A5): die Einheiten gehen mit den Spalten
+    # hinaus, aus derselben Item-Tabelle wie die Spaltennamen. Damit koennen
+    # Kopf und Einheiten so wenig auseinanderlaufen wie Kopf und Daten.
+    ausgabe_metadaten.setdefault("units", table.unit_map())
 
     sink.open([item.key for item in table.items], ausgabe_metadaten)
     try:

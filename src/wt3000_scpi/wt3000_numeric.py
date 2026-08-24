@@ -93,6 +93,17 @@ class NumericItem:
             name += f"_{self.order}"
         return name
 
+    @property
+    def unit(self) -> "str | None":
+        """Einheit dieses Items. None heisst 'nicht bekannt'.
+
+        NEU (ROADMAP M4-3, Maßnahme A5). Die Einheit haengt allein an der
+        Funktion, nicht am Element: 'U1' und 'USIGMA' sind beide Volt.
+        """
+        if self.is_none:
+            return None
+        return unit_of(self.function)
+
     @classmethod
     def parse(cls, index: int, token: str) -> "NumericItem":
         """Ein Token wie 'UTHD,1' oder 'PHI,1,1' in ein NumericItem wandeln."""
@@ -105,6 +116,67 @@ class NumericItem:
             element=parts[1] if len(parts) > 1 else None,
             order=parts[2] if len(parts) > 2 else None,
         )
+
+
+# ---------------------------------------------------------------------------
+# NEU (ROADMAP M4-3, Maßnahme A5): Einheiten
+# ---------------------------------------------------------------------------
+#
+# Eine Messdatei, in deren Kopf 'U1,I1,P1' steht, ist ohne Zusatzwissen nicht
+# eindeutig: dass U in Volt und WH in Wattstunden kommt, weiss der, der die
+# Messung aufgesetzt hat - und niemand sonst, Wochen spaeter erst recht nicht.
+#
+# WAS HIER STEHT UND WAS NICHT. Aufgenommen sind ausschliesslich Groessen,
+# deren Einheit belegt ist: die elektrischen Grundgroessen, die Frequenz und
+# die Integrationsgroessen - letztere sind im Kopf von INTEGRATION_FUNCTIONS
+# (wt3000_measure.py) aus dem Handbuch mit [Wh], [Ah], [VAh] und [varh]
+# uebernommen.
+#
+# NICHT aufgenommen sind die Summengroessen der Oberschwingungsanalyse
+# (UTHD, ITHD, PTHD, UTHF, ITHF, UTIF, ITIF, HVF, HCF). Ihre Einheit haengt
+# an Geraeteeinstellungen, und der im Projekt vorliegende Auszug
+# (docs/WT3000_Communication_Commands.md) ist die Kommandoreferenz - eine
+# Einheitentabelle enthaelt er nicht. Sie liefern deshalb None und nicht etwa
+# ein plausibles '%': eine geratene Einheit an einem Messwert ist schlimmer
+# als eine fehlende, weil sie geglaubt wird.
+# ZU VERIFIZIEREN (ROADMAP M4-3): Einheiten der neun Oberschwingungsfaktoren
+# am Geraet oder aus IM WT3001E-01EN nachtragen.
+#
+# Die leere Zeichenkette bedeutet "dimensionslos und das ist bekannt"
+# (LAMBDA ist ein Verhaeltnis), None bedeutet "nicht bekannt". Der
+# Unterschied ist der ganze Zweck dieser Tabelle und wird bis in die Ausgabe
+# durchgehalten.
+FUNCTION_UNITS: dict[str, str] = {
+    # Grundgroessen
+    "U": "V",
+    "I": "A",
+    "P": "W",
+    "S": "VA",
+    "Q": "var",
+    "LAMBDA": "",       # Leistungsfaktor - ein Verhaeltnis
+    "PHI": "deg",       # Phasenwinkel
+    "FU": "Hz",
+    "FI": "Hz",
+    # Integration (Handbuch 6-99, siehe INTEGRATION_FUNCTIONS)
+    "TIME": "s",
+    "WH": "Wh",
+    "WHP": "Wh",
+    "WHM": "Wh",
+    "AH": "Ah",
+    "AHP": "Ah",
+    "AHM": "Ah",
+    "WS": "VAh",
+    "WQ": "varh",
+}
+
+
+def unit_of(function: str) -> "str | None":
+    """Einheit einer Messfunktion. None heisst 'nicht bekannt'.
+
+    NEU (ROADMAP M4-3). Zur Abgrenzung von '' siehe den Kopf von
+    FUNCTION_UNITS: '' ist eine Aussage, None ist deren Fehlen.
+    """
+    return FUNCTION_UNITS.get(function.strip().upper())
 
 
 @dataclass
@@ -145,6 +217,18 @@ class ItemTable:
                 len(items),
             )
         return cls(number=number, items=items)
+
+    def units(self) -> tuple["str | None", ...]:
+        """Einheiten in der Reihenfolge der Items. None heisst 'nicht bekannt'.
+
+        NEU (ROADMAP M4-3, Maßnahme A5). Gegenstueck zu den Spaltennamen aus
+        'item.key' - dieselbe Reihenfolge, dieselbe Laenge.
+        """
+        return tuple(item.unit for item in self.items)
+
+    def unit_map(self) -> dict[str, "str | None"]:
+        """Spaltenname -> Einheit. Die Form, die in die Metadaten geht."""
+        return {item.key: item.unit for item in self.items}
 
     @classmethod
     def read_from_device(cls, session: WTSession) -> "ItemTable":

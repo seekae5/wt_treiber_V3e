@@ -4,7 +4,7 @@
 
 **Abgeschlossen:** M1-1, M1-2, M4-1, M4-2 sowie die Befundpakete P-1…P-8
 
-**Prüfstand:** 682 Tests, Ruff und Mypy ohne Befund
+**Prüfstand:** 725 Tests, Ruff und Mypy ohne Befund
 
 **Bezug:** [OFFENE_PUNKTE.md](OFFENE_PUNKTE.md) ·
 [AENDERUNGEN_2026-08-18.md](AENDERUNGEN_2026-08-18.md)
@@ -30,8 +30,8 @@ Die Kommandoübersicht ist eine Geräte- und keine Implementierungsübersicht.
 | Gerätekonfiguration einstellen | sichere Schreib- und Restoremuster für Item-Tabelle, Bereiche und Eingangskonfiguration | Gerätegruppen jenseits `:INPut`, ein gemeinsames Backup, Setup-Speicher | **15 %** |
 | Messkonfiguration | `InputConfig`, `RangePlan`, Snapshots, Diff und Restore | geräteabhängige Element-/Bereichstabellen, `InputPlan`, Eingangsart und unabhängiger Modus setzen | **75 %** |
 | Messsteuerung | blockierende Messschleife, HOLD, driftfreie Taktung, Taktkopplung und Dublettenerkennung, Statistik, `Sample` | start-/stoppbares Objekt, Generator, Geräteintegration, Ereignistakt, Wiederverbindung | **45 %** |
-| Datenexport | `SampleSink`, CSV, JSONL, Callback und Bündel; strenge Spaltenregel | Einheiten, verbindliche Metadaten, Rotation und Fortsetzung | **80 %** |
-| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 682 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
+| Datenexport | `SampleSink`, CSV, JSONL, Callback und Bündel; strenge Spaltenregel; Einheiten an den Daten | verbindliche Metadaten, Rotation und Fortsetzung | **85 %** |
+| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 725 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
 
 Die Fassade und der austauschbare Export sind nicht mehr Zielbild, sondern Bestand.
 Der Schwerpunkt liegt jetzt auf Hardwarebelegen, vollständiger Konfiguration und einer
@@ -44,10 +44,10 @@ steuerbaren Langzeitmessung.
 | Meilenstein | Status | Nächster Abschluss |
 |---|---|---|
 | M0 — Gerätefragen | **teilweise** | ein protokollierter Gerätetermin; Spannungssyntax ist bereits belegt |
-| M1 — Fundament | **teilweise** | M1-3 bis M1-5 |
+| M1 — Fundament | **teilweise** | M1-3 weitgehend und M1-4 umgesetzt; offen: Bereichstabellen nach Modultyp und M1-5 |
 | M2 — Konfiguration | **teilweise** | M2-1 zur Hälfte und M2-4 umgesetzt; offen: M2-2, M2-3, M2-5 |
 | M3 — Messsteuerung | **teilweise** | M3-2 Integration und M3-3 Ersatzweg umgesetzt; Sitzungsbesitz entscheiden, danach M3-1 |
-| M4 — Export | **teilweise** | M4-3 Einheiten und Metadaten |
+| M4 — Export | **teilweise** | M4-3 Einheiten umgesetzt; offen: verbindliche Metadaten und M4-4 |
 | M5 — Auslieferung | **teilweise** | CLI, Paketmetadaten und CI |
 
 ---
@@ -172,15 +172,28 @@ beruhen.
 **Fertig, wenn:** ein 3-Element-Gerät oder ein Gerät mit anderem Strommodul ohne
 Codeänderung initialisiert werden kann.
 
-### M1-4 — Protokollzustand herstellen `S`
+### M1-4 — Protokollzustand herstellen `S` — **umgesetzt 2026-08-25**
 
-`check_protocol_state()` prüft heute nur. Ergänzt werden soll ein abgesicherter
-Ablauf, der in einer schreibfähigen Sitzung Header, Verbose-Modus und Zahlenformat
-sichert, auf den Sollzustand stellt und beim Verlassen wiederherstellt. Rein lesende
-Sitzungen bleiben beim klaren Abbruch.
+- [x] `WT3000.protocol_state()` erhebt den Ist-Zustand der drei Knoten. Die Antworten
+  laufen durch `strip_response_header()` — genau der Fall, um den es geht, lässt das
+  Gerät `:COMMUNICATE:HEADER 1` statt `1` antworten.
+- [x] `WT3000.ensured_protocol_state()` als Context Manager: sichert, stellt auf den
+  Sollzustand, gibt beim Verlassen den Ausgangszustand zurück — im `finally`, also auch
+  bei Strg+C. Rückgabewert sind die tatsächlich geänderten Knoten mit ihrem vorherigen
+  Wert; ein leeres Dictionary heißt „war schon richtig", und dann geht auch kein
+  einziges Kommando hinaus.
+- [x] Reihenfolge mit Grund: `:COMMunicate:HEADer` zuerst — danach kommen alle
+  Rückleseproben ohne Kopf —, beim Zurücknehmen umgekehrt.
+- [x] Rein lesende Sitzungen: laufen durch, wenn der Zustand bereits stimmt; müsste
+  geschrieben werden, bleibt es beim klaren Abbruch, dessen Meldung beide Auswege nennt.
 
-**Fertig, wenn:** eine abweichend eingestellte Frontplatte einen schreibfähigen Lauf
-nicht verhindert und danach ihren Ausgangszustand zurückerhält.
+**Bewusst nicht umgesetzt:** `record()` ruft den Ablauf **nicht** von selbst. Er
+schreibt, und ein Messaufruf, der unangekündigt am Gerätezustand dreht, wäre das
+Gegenteil dessen, wofür die beiden Schlösser dieses Treibers da sind. Der Aufruf gehört
+sichtbar in den Ablauf.
+
+**Fertig, wenn:** erfüllt — gerätefrei durchgespielt in
+[tests/test_protokollzustand.py](../tests/test_protokollzustand.py).
 
 ### M1-5 — Fehlerpfade härten `S`
 
@@ -380,15 +393,30 @@ Benötigt M1-5 und M2-4.
 - [x] Senkenlebenszyklus in der Messschleife
 - [x] zentrale strenge Spaltenregel
 
-### M4-3 — Einheiten und Metadaten `M`
+### M4-3 — Einheiten und Metadaten `M` — **Einheiten umgesetzt 2026-08-25**
 
-- Funktionsname auf Einheit abbilden
-- Skalierungsfaktoren und Gerätesteckbrief als Metadaten führen
-- CSV wahlweise mit Einheitzeile oder eindeutigem Sidecar
-- sicherstellen, dass Daten und Metadaten nicht getrennt vergessen werden können
-- JSONL-Metadatenmodell als Vorlage verwenden
+- [x] **Funktionsname auf Einheit abbilden.** `FUNCTION_UNITS` und `unit_of()` in
+  [wt3000_numeric.py](../src/wt3000_scpi/wt3000_numeric.py), dazu `NumericItem.unit`,
+  `ItemTable.units()` und `ItemTable.unit_map()`. Aufgenommen sind ausschließlich
+  belegte Größen: die elektrischen Grundgrößen, die Frequenz und die
+  Integrationsgrößen. Der Unterschied zwischen **dimensionslos** (`""`, etwa `LAMBDA`)
+  und **nicht belegt** (`None`) wird bis in die Ausgabedatei durchgehalten.
+- [x] **Einheiten gehen mit den Daten hinaus.** Die Messschleife legt sie als
+  `metadata["units"]` in jede Senke — aus derselben Item-Tabelle wie die Spaltennamen,
+  damit Kopf und Einheiten so wenig auseinanderlaufen können wie Kopf und Daten. JSONL
+  und Sidecar tragen sie ohne Zutun; `CsvSink(unit_row=True)` schreibt eine zweite
+  Kopfzeile. Eine Angabe des Aufrufers hat Vorrang.
+- [ ] Skalierungsfaktoren und Gerätesteckbrief als **verbindliche** Metadaten — sie
+  stehen heute im optionalen Sidecar.
+- [ ] Feste Bindung zwischen Datendatei und Sidecar, damit beide nicht getrennt
+  vergessen werden können.
+- [ ] **ZU VERIFIZIEREN:** Einheiten der neun Oberschwingungsfaktoren (`UTHD`, `ITHD`,
+  `PTHD`, `UTHF`, `ITHF`, `UTIF`, `ITIF`, `HVF`, `HCF`). Der Kommandoauszug im Projekt
+  ist die Kommandoreferenz und enthält keine Einheitentabelle; ein plausibles `%` wäre
+  geraten. Bis dahin liefern sie `None`.
 
-**Fertig, wenn:** eine Messdatei ohne Zusatzwissen eindeutig interpretierbar ist.
+**Fertig, wenn:** eine Messdatei ohne Zusatzwissen eindeutig interpretierbar ist — die
+Einheiten sind da, die verbindliche Bindung an den Gerätesteckbrief fehlt noch.
 
 ### M4-4 — Dateiverwaltung `S`
 

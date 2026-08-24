@@ -184,6 +184,8 @@ Sitzung daher nicht gleichzeitig aus mehreren Threads verwendet werden.
 | `log_summary()` | Schreibt den Steckbrief in das Python-Log. |
 | `has_element(element)` | Prüft, ob ein Element bestückt ist. |
 | `WT3000.refresh_device()` | Liest Verdrahtung, Module und Elementliste neu und zieht `wt.input` und `wt.ranges` nach. |
+| `WT3000.protocol_state()` | Ist-Zustand von Header, Verbose und Zahlenformat. Verändert nichts. |
+| `WT3000.ensured_protocol_state()` | Context Manager: stellt den Sollzustand her und nimmt ihn beim Verlassen zurück. |
 
 **Nach einer Umverdrahtung.** Der Steckbrief trägt die Elementliste *und* die Zuordnung
 der Wiring-Units; aus ihm sind `wt.input` und `wt.ranges` verdrahtet. Ändert sich die
@@ -789,6 +791,29 @@ Wichtige optionale Parameter sind `interval_s`, `max_samples`, `max_duration_s`,
 Mindestens ein Limit ist für eingebettete Anwendungen empfehlenswert; ohne Limit läuft
 die Schleife bis `Strg+C`.
 
+**Protokollzustand vor der ersten Messung.** `:COMMunicate:HEADer 0` und
+`:NUMeric:FORMat FLOat` sind Voraussetzung der Binärauswertung. `record()` prüft das
+nicht selbst und stellt es erst recht nicht her — beides gehört einmal und sichtbar in
+den Ablauf:
+
+```python
+with WT3000.connect(read_only=False, allow_changes=True) as wt:
+    with wt.ensured_protocol_state():
+        wt.measure.record_csv(pfad, wt.items.read(), unit_row=True)
+```
+
+Stimmt der Zustand schon, geht kein Kommando hinaus. Beim Verlassen steht wieder, was
+vorgefunden wurde.
+
+**Einheiten.** Seit M4-3 gehen die Einheiten der Messwerte mit den Spalten hinaus — in
+JSONL und im Sidecar ohne Zutun, in der CSV über `unit_row=True` als zweite Kopfzeile.
+Sie stammen aus derselben Item-Tabelle wie die Spaltennamen. Zwei Werte sind zu
+unterscheiden: eine leere Angabe heißt **dimensionslos** (etwa `LAMBDA`), `null`
+beziehungsweise `?` heißt **nicht belegt** — für die neun Oberschwingungsfaktoren liegt
+im Projekt kein Beleg vor, und ein geratenes `%` wäre schlechter als keine Angabe. Wer
+die Einheit kennt, gibt sie über `metadata={"units": {...}}` selbst mit; die Angabe des
+Aufrufers hat Vorrang.
+
 **`interval_s` ist der Takt der Schleife, nicht die Rate des Geräts.** Wie oft das
 WT3000 einen neuen Messdatensatz bildet, steht auf `:RATE` und wird über
 `wt.input.set_update_rate()` gestellt. Beide Werte werden seit M3-3 gegeneinander
@@ -866,6 +891,7 @@ Spaltenüberschriften geschrieben werden.
 | Klasse/Methode | Bedeutung |
 |---|---|
 | `Sample` | Ein Zyklus mit `timestamp`, `elapsed_s`, `number`, `condition`, `values` und `mark`. |
+| `ItemTable.unit_map()` | Spaltenname → Einheit. `""` heißt dimensionslos, `None` heißt „nicht belegt“. |
 | `Sample.status_flags(column_names)` | Liefert Auffälligkeiten wie `U2=OVERRANGE`. |
 | `SampleMark` | Zyklusstatus `OK` und `DUPLICATE`; `MISSING` ist vorbereitet (M3-4). |
 | `LoopStatistics` | Enthält `samples`, `overruns`, `duplicates`, `measured_samples`, `update_rate_s`, `cycle_times` und `status_counts`. |

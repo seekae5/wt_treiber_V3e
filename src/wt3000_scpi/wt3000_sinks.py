@@ -142,11 +142,26 @@ class CsvSink:
     hat keinen Ort dafuer, der nicht zugleich den Spaltenkopf beschaedigt.
     Sie liegt heute im Sidecar von 'write_metadata()'; sie an die Daten zu
     binden ist ROADMAP M4-3.
+
+    EINE AUSNAHME (ROADMAP M4-3, Maßnahme A5): 'unit_row=True' schreibt unter
+    den Spaltenkopf eine zweite Zeile mit den Einheiten. Sie stammen aus
+    'metadata["units"]', das die Messschleife aus der Item-Tabelle fuellt -
+    also aus derselben Quelle wie der Kopf.
+
+    Warum das nicht die Voreinstellung ist: eine zweite Kopfzeile ist eine
+    Formataenderung. Jedes Werkzeug, das bisher 'eine Kopfzeile, dann Daten'
+    erwartet, laese die Einheiten als ersten Datensatz. Wer die Datei selbst
+    auswertet, schaltet sie ein; wer eine bestehende Auswertekette bedient,
+    laesst sie aus und nimmt die Einheiten aus dem Sidecar oder aus JSONL.
+    Eine unbekannte Einheit steht als '?' in der Zeile, eine bekannte
+    dimensionslose Groesse als leere Zelle - der Unterschied bleibt bis hier
+    erhalten.
     """
 
-    def __init__(self, path: Path, delimiter: str = ",") -> None:
+    def __init__(self, path: Path, delimiter: str = ",", unit_row: bool = False) -> None:
         self._path = path
         self._delimiter = delimiter
+        self._unit_row = unit_row
         self._columns: list[str] = []
         self._handle: TextIO | None = None
         # csv.writer() liefert '_csv._writer' - kein oeffentlich benannter Typ.
@@ -164,8 +179,27 @@ class CsvSink:
         header.extend(self._columns)
         header.append("status_flags")
         writer.writerow(header)
+
+        # NEU (ROADMAP M4-3): die Einheitenzeile, wenn verlangt.
+        if self._unit_row:
+            roh = (metadata or {}).get("units")
+            einheiten: Mapping[str, object] = roh if isinstance(roh, Mapping) else {}
+            zeile = ["", "s", "", ""]
+            zeile.extend(self._unit_cell(einheiten.get(name)) for name in self._columns)
+            zeile.append("")
+            writer.writerow(zeile)
+
         self._handle.flush()
         _log.info("CSV geoeffnet: %s (%d Spalten)", self._path, len(header))
+
+    @staticmethod
+    def _unit_cell(unit: object) -> str:
+        """Einheit in die Zellendarstellung wandeln.
+
+        None heisst 'nicht belegt' und wird als '?' geschrieben - nicht als
+        leere Zelle, denn die ist bereits vergeben: sie heisst 'dimensionslos'.
+        """
+        return "?" if unit is None else str(unit)
 
     @staticmethod
     def _cell(value: NumericValue) -> str:
