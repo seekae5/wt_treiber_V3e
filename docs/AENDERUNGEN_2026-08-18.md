@@ -286,6 +286,60 @@ Ablauf vollständig; abgehakt ist M3-2 erst nach einem Lauf am realen Gerät.
 
 ---
 
+## 2026-08-21 — Rechenfunktionen (M2-1, Punkt 2 und 3)
+
+### Averaging betrifft jede Messung
+
+Eine Messreihe mit unbemerkt eingeschaltetem Averaging über 64 Zyklen ist eine
+andere Messung als dieselbe Reihe ohne. Bisher ließ sich das weder prüfen noch
+ändern; die Analyse führt es als Rang 2. Neu ist `ComputationConfig` im selben
+Modul wie die Integration: Averaging (ein/aus, Art, Zahl), Wirkungsgradgleichung
+η1…η4, Frequenzmessquelle Freq1/Freq2, `SQFormula` und `SYNChronize`, dazu
+`capture()`/`restore()`. Erreichbar als `wt.computation`.
+
+Für die zweite Gruppe im Modul ist **keine neue Parserregel** dazugekommen —
+genau das war die Absicht hinter dem gemeinsamen Fachmodul.
+
+### Die Abhängigkeiten sind der Grund für das Fachobjekt
+
+- Die **Averaging-Zahl hängt an der Averaging-Art** (`EXPonent` 2…64, `LINear`
+  8…256). Deshalb setzt `set_averaging()` beides gemeinsam und in der
+  Reihenfolge TYPE → COUNt → STATe; getrennte Setter liefen je nach Reihenfolge
+  durch einen Zwischenzustand, den das Gerät ablehnt.
+- `U<x>`/`P<x>` werden gegen die **bestückte Elementliste** geprüft.
+- `PB` verlangt vier Elemente, `PM` die Motorvariante, `TYPE3` die Option `/G6`.
+
+Der letzte Punkt ist die erste Stelle, an der der Steckbrief aus M1-3 praktisch
+genutzt wird: die Fassade reicht `has_option("G6")` und `is_motor_model` in das
+Fachmodul, das selbst kein `DeviceInfo` kennt. Die Regel „unbekannt ist nicht
+dasselbe wie fehlt" gilt dabei weiter.
+
+### Nebenwirkung: ein Kommentar wurde nachprüfbar
+
+`build_standard_profile()` behauptete, die Frequenzmessquelle stehe auf U3/I3 —
+nachprüfen ließ sich das nicht. `wt.computation.frequency_item(1)` liefert die
+tatsächliche Einstellung.
+
+### Bewusst offen
+
+`:MEASure:FUNCtion<x>` (Ausdruck als Zeichenkette — eigene kleine Sprache),
+`:PC`, `:DMeasure`, `:COMPensation`, `:PHASe`, `:SAMPling`, `:MHOLd`. Alle im
+Modulkopf einzeln benannt und begründet.
+
+### Prüfung
+
+37 neue Prüfsätze in `tests/test_computation.py`.
+
+```text
+pytest: 591 passed
+ruff:   All checks passed
+mypy:   Success: no issues found in 18 source files
+```
+
+Auch hier steht die **Geräteabnahme aus** (M0-3).
+
+---
+
 ## Weitere bereits erledigte Infrastruktur
 
 - `.gitattributes` führt Textdateien einheitlich mit LF und schützt die DLL als binär.

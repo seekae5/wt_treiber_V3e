@@ -453,6 +453,46 @@ def integrate_responses(
     }
 
 
+def computation_responses(
+    avg_state: str = "0",
+    avg_type: str = "EXPONENT",
+    avg_count: str = "8",
+    freq1: str = "U3",
+    freq2: str = "I3",
+    eta1: str = "OFF",
+    eta2: str = "OFF",
+    eta3: str = "OFF",
+    eta4: str = "OFF",
+    sq: str = "TYPE1",
+    sync: str = "MASTER",
+) -> dict[str, str]:
+    """Alles, was 'ComputationConfig.capture()' abfragt.
+
+    Die Frequenzquellen stehen auf U3/I3 - genau die Einstellung, die der
+    Kommentar in 'build_standard_profile()' beschreibt und die dort erklaert,
+    warum FU nur fuer Element 3 gefuehrt wird.
+    """
+    return {
+        ":MEASURE:AVERAGING:STATE": avg_state,
+        ":MEASURE:AVERAGING:TYPE": avg_type,
+        ":MEASURE:AVERAGING:COUNT": avg_count,
+        ":MEASURE:FREQUENCY:ITEM1": freq1,
+        ":MEASURE:FREQUENCY:ITEM2": freq2,
+        ":MEASURE:EFFICIENCY:ETA1": eta1,
+        ":MEASURE:EFFICIENCY:ETA2": eta2,
+        ":MEASURE:EFFICIENCY:ETA3": eta3,
+        ":MEASURE:EFFICIENCY:ETA4": eta4,
+        ":MEASURE:SQFORMULA": sq,
+        ":MEASURE:SYNCHRONIZE": sync,
+    }
+
+
+@pytest.fixture
+def rechenantworten() -> dict[str, str]:
+    """Antworttabelle der Rechengruppe im Ausgangszustand."""
+    return computation_responses()
+
+
 @pytest.fixture
 def integrationsantworten() -> dict[str, str]:
     """Antworttabelle der Integrationsgruppe im Ausgangszustand."""

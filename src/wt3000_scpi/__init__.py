@@ -90,11 +90,18 @@ from .wt3000_device import (
 # gibt das Zuruecksetzen frei.
 from .wt3000_deviceconfig import (
     GROUP_RESET,
+    AveragingSettings,
+    AveragingType,
+    ComputationConfig,
+    ComputationSettings,
+    EfficiencyEquation,
     IntegrationConfig,
     IntegrationMode,
     IntegrationSettings,
     IntegrationState,
     IntegrationStateError,
+    SQFormula,
+    SyncMode,
 )
 from .wt3000_input import (
     ConfigLocked,
@@ -153,6 +160,14 @@ __all__ = [
     "MeasMode",
     "ValueStatus",
     "NumericValue",
+    # Rechenfunktionen (M2-1)
+    "ComputationConfig",
+    "ComputationSettings",
+    "AveragingSettings",
+    "AveragingType",
+    "EfficiencyEquation",
+    "SQFormula",
+    "SyncMode",
     # Integration (M3-2)
     "IntegrationConfig",
     "IntegrationMode",

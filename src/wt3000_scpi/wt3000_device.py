@@ -59,7 +59,7 @@ from .wt3000_common import (
 )
 from .wt3000_core import TmctlTransport, Transport, WTConfig, WTError, WTSession
 # NEU (M3-2/M2-1): die Geraetegruppen jenseits von ':INPut' und ':NUMeric'.
-from .wt3000_deviceconfig import IntegrationConfig
+from .wt3000_deviceconfig import ComputationConfig, IntegrationConfig
 from .wt3000_input import InputConfig, WiringUnit
 from .wt3000_itemspec import (
     ItemSpec,
@@ -907,6 +907,7 @@ class WT3000:
         self._items: ItemAccess | None = None
         self._measure: MeasureControl | None = None
         self._integration: IntegrationConfig | None = None
+        self._computation: ComputationConfig | None = None
 
     # -- Erzeugen -----------------------------------------------------------
 
@@ -1074,6 +1075,37 @@ class WT3000:
                 self._session, allow_changes=self._allow_changes
             )
         return self._integration
+
+    @property
+    def computation(self) -> ComputationConfig:
+        """Rechenfunktionen (':MEASure') - Averaging, Wirkungsgrad, Frequenzquelle.
+
+        NEU (ROADMAP M2-1 Punkt 2/3, Rang 2 der Analyse). Hier zeigt sich, was
+        der Steckbrief aus M1-3 wert ist: die Fassade reicht drei Dinge hinein,
+        die das Fachmodul selbst nicht wissen kann -
+
+          * die bestueckte Elementliste, gegen die 'P<x>'/'U<x>' geprueft wird
+            (dieselbe, die auch 'wt.ranges' bekommt),
+          * ob '/G6' verbaut ist - nur damit ist der S/Q-Formelsatz TYPE3
+            waehlbar,
+          * ob das Geraet die Motorvariante traegt - nur dann ist 'PM' als
+            Glied einer Wirkungsgradgleichung zulaessig.
+
+        Beide Faehigkeiten gehen als bool und nicht als 'vielleicht' hinein:
+        'supports()' und 'is_motor_model' haben die Unbekannt-Frage bereits
+        entschieden (siehe DeviceInfo.supports - unbekannt gilt dort als
+        'nicht ausgeschlossen').
+        """
+        self._require_open()
+        if self._computation is None:
+            self._computation = ComputationConfig(
+                self._session,
+                allow_changes=self._allow_changes,
+                elements=self._device.elements,
+                advanced_computation=self._device.has_option("G6"),
+                motor=self._device.is_motor_model,
+            )
+        return self._computation
 
     @property
     def measure(self) -> MeasureControl:

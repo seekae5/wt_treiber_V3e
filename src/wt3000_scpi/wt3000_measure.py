@@ -56,6 +56,12 @@ def build_standard_profile() -> tuple[ItemSpec, ...]:
     ':MEASure?' auf U3/I3, deshalb liefern FU1 und FU2 strukturell NAN.
     Aendert sich die Frequenzmessquelle, ist diese Liste anzupassen.
 
+    UEBERARBEITET (21.08.2026): Diese Zuordnung war bis hierher ein Kommentar,
+    den niemand nachpruefen konnte. Seit ':MEASure' erschlossen ist, liefert
+    'wt.computation.frequency_item(1)' die tatsaechlich eingestellte Quelle -
+    wer das Profil anpasst, kann vorher nachsehen, statt sich auf diesen Absatz
+    zu verlassen.
+
     UEBERARBEITET (21.08.2026): Der frueher hier stehende offene Punkt zu den
     Integrationsitems ist erledigt - sie stehen jetzt in
     'build_integration_profile()' direkt darunter. Die damalige Einschaetzung

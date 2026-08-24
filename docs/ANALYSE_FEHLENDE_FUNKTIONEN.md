@@ -231,6 +231,11 @@ gliedert.
 * Priorität hoch: Averaging ist in der Praxis fast immer aktiv; ohne
   Softwarezugriff muss der Anwender es panelseitig vorkonfigurieren und darf es
   während der Messung nie prüfen/ändern
+* **Erledigt am 21.08.2026** — `ComputationConfig` in
+  [`wt3000_deviceconfig.py`](../src/wt3000_scpi/wt3000_deviceconfig.py) deckt
+  Averaging, Wirkungsgradgleichung, Frequenzmessquelle, `SQFormula` und
+  `SYNChronize` ab. `DMeasure`, `COMPensation`, `FUNCtion` und `PC` bleiben
+  offen und sind im Modulkopf einzeln begründet. Details in Abschnitt 8.
 
 ### 2.3 Oberschwingungsanalyse (Harmonics)
 * Fehlt vollständig: `:HARMonics`-Gruppe — `FBANd` (Bandbreite), `IEC`
@@ -328,7 +333,7 @@ gliedert.
 |---|---|---|---|---|
 | 0 | `*OPT?` in `DeviceInfo` auswerten | keine (Common Command) | Voraussetzung für alle optionsgebundenen Punkte unten — sollte vor Rang 3, 5, 8, 10 stehen, damit keine Arbeit an nicht vorhandener Hardware entsteht | **umgesetzt 2026-08-21** — siehe Abschnitt 6 |
 | 1 | `IntegratorControl` (`:INTEGrate`) — Wh/Ah-Messung steuern | **nein** | Kernfunktion eines Leistungsmessgeräts, heute nicht steuerbar | **umgesetzt 2026-08-21** als `IntegrationConfig` — siehe Abschnitt 7 |
-| 2 | `ComputationConfig` (`:MEASure`, insb. Averaging) | **nein** (außer Delta-Teil, siehe unten) | Betrifft praktisch jede Messung, nicht nur Spezialfälle | Delta-Teil **freigegeben** — `DT` ist verbaut |
+| 2 | `ComputationConfig` (`:MEASure`, insb. Averaging) | **nein** (außer Delta-Teil, siehe unten) | Betrifft praktisch jede Messung, nicht nur Spezialfälle | **umgesetzt 2026-08-21** (ohne Delta) — siehe Abschnitt 8 |
 | 3 | `HarmonicsConfig` (`:HARMonics`) | **`/G5` oder `/G6`** | Einer der Hauptanwendungsfälle des WT3000 — aber erst nach `*OPT?`-Check angehen | **freigegeben** — `G6` ist verbaut (obwohl `G5` fehlt) |
 | 4 | Steuerbares Mess-Objekt + Trigger (`*TRG`/`GET`, `STATus:CONDition?`-Polling auf UPD-Bit) | **nein** | Grundlage für 2.1, 2.6 und robuste Automatisierung; Ereignismechanismus jetzt am Handbuch belegt (Abschnitt 0.2), nicht mehr nur Vermutung | UPD-Polling **widerlegt** (0 Treffer in 3556 Proben) — Weg über EESE/SRQ oder Dublettenerkennung nötig |
 | 5 | `:CBCycle` (zyklus-/ereignisgetriggerte Messung) | **`/CC`** | Für synchrone/getriggerte Anwendungsfälle jenseits der freilaufenden Schleife | **freigegeben** — `CC` ist verbaut, Werksconfig braucht keine externe Verkabelung |
@@ -518,3 +523,63 @@ Die **Geräteabnahme**. Jedes Kommando dieser Gruppe ist ein Set-Kommando und
 hängt damit an ROADMAP M0-3 (nimmt das Gerät Set-Kommandos über Ethernet ohne
 `:COMMunicate:REMote ON` an?). Gebaut und gerätefrei durchgespielt ist der
 Ablauf vollständig; abgehakt ist M3-2 erst nach einem Lauf am realen Gerät.
+---
+
+## 8 — Umgesetzt: Rang 2, Rechenfunktionen (2026-08-21)
+
+`ComputationConfig` steht neben `IntegrationConfig` im selben Modul — der Beleg,
+dass die Entscheidung aus Abschnitt 7 (ein Fachmodul für die Gerätegruppen statt
+eines Moduls je Gruppe) getragen hat: für die zweite Gruppe ist **keine einzige
+neue Parserregel** dazugekommen.
+
+### Abgedeckt
+
+| Stellgröße | Zugriff |
+|---|---|
+| Averaging ein/aus, Art, Zahl | `averaging()`, `set_averaging()`, `averaging_disabled()` |
+| Frequenzmessquelle Freq1/Freq2 | `frequency_item()`, `set_frequency_item()` |
+| Wirkungsgradgleichung η1…η4 | `efficiency()`, `set_efficiency()` |
+| S/Q-Formelsatz | `sq_formula()`, `set_sq_formula()` |
+| Synchronisationsrolle | `sync_mode()`, `set_sync_mode()` |
+| Momentaufnahme | `capture()`, `restore()`, `describe()` |
+
+Erreichbar als `wt.computation`.
+
+### Der eigentliche Gewinn sind die Abhängigkeiten
+
+Fast jeder Wert dieser Gruppe ist nur in einem Kontext gültig. Genau deshalb
+lohnt ein Fachobjekt statt roher Kommandos — jede dieser Regeln greift, **bevor**
+etwas gesendet wird:
+
+* **Averaging-Zahl hängt an der Averaging-Art.** `EXPonent` erlaubt 2…64,
+  `LINear` 8…256 (Handbuch 6-76). `128` ist bei der einen Art richtig und bei
+  der anderen falsch. Deshalb setzt `set_averaging()` Art und Zahl **gemeinsam**
+  und in der Reihenfolge TYPE → COUNt → STATe: wer beides einzeln setzt, läuft
+  je nach Reihenfolge durch einen Zwischenzustand, den das Gerät ablehnt.
+* **`U<x>`/`P<x>` hängen an der bestückten Elementliste** — dieselbe, die schon
+  `wt.ranges` bekommt.
+* **`PB` verlangt vier Elemente, `PM` die Motorvariante, `TYPE3` die Option
+  `/G6`.** Hier zahlt sich Rang 0 aus: die Fassade reicht `has_option("G6")` und
+  `is_motor_model` aus dem Steckbrief in das Fachmodul, das selbst kein
+  `DeviceInfo` kennt. Für beide gilt weiter die Regel aus Abschnitt 6 —
+  *unbekannt ist nicht dasselbe wie fehlt* und führt nicht zur Ablehnung.
+
+### Ein Kommentar ist zu einer Abfrage geworden
+
+`build_standard_profile()` trug den Satz: „FU wird nur für Element 3 geführt: die
+Frequenzmessquelle steht laut `:MEASure?` auf U3/I3." Das war eine Feststellung,
+die niemand nachprüfen konnte, ohne das Gerät zu befragen. `frequency_item(1)`
+liefert sie jetzt — wer das Profil anpasst, sieht vorher nach.
+
+### Was bewusst offen bleibt
+
+`:MEASure:FUNCtion<1..20>` nimmt einen **Ausdruck als Zeichenkette**
+(`"UMN(E1)"`) — eine eigene kleine Sprache mit eigener Fehlerbehandlung, also
+ein eigener Schritt und kein Nebenprodukt. `:PC` ist eine Normfrage (IEC),
+`:DMeasure` passt seine zulässigen Werte an die Verdrahtung an und gehört
+deshalb neben die Verdrahtungslogik, nicht hierher. Dazu `:COMPensation`,
+`:PHASe`, `:SAMPling`, `:MHOLd`. Alle sind im Modulkopf einzeln benannt — sie
+halbfertig mitzunehmen wäre schlechter gewesen, als sie zu benennen.
+
+Wie bei Rang 1 gilt: **die Geräteabnahme steht aus**, jedes Set-Kommando dieser
+Gruppe hängt an M0-3.

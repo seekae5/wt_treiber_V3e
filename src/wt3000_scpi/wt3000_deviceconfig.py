@@ -14,8 +14,17 @@
 # Vorschlag lautet: "die Knotenebene (MODE, TIMer, RTIMe, STATe?) gehoert nach
 # unten in die Konfigurationsschicht". Genau das ist diese Datei; sie traegt
 # deshalb den in ROADMAP Abschnitt 3 vorgesehenen Namen und nicht einen
-# eigenen. Averaging, Frequenzmessquelle und die uebrigen Gruppen aus M2-1
-# kommen hier hinein, nicht in ein drittes Modul.
+# eigenen.
+#
+# Seit dem 21.08.2026 wohnen hier zwei Gruppen, und die zweite ist der Beleg,
+# dass die Entscheidung getragen hat:
+#
+#   IntegrationConfig   ':INTEGrate' - Wh-/Ah-Messung steuern (Rang 1)
+#   ComputationConfig   ':MEASure'   - Averaging, Wirkungsgrad,
+#                                      Frequenzmessquelle (Rang 2)
+#
+# Beide teilen sich Sperre, Schreibpfad und Parser; hinzugekommen ist fuer die
+# zweite Gruppe keine einzige neue Parserregel.
 #
 # Kein einziger Parser ist dafuer neu geschrieben worden: Kopfentfernung,
 # NR1/NR3, Boolean, NRf-Formatierung und die Aufzaehlungsregel kommen alle aus
@@ -77,9 +86,11 @@ from enum import Enum
 from typing import Callable, Iterator
 
 from .wt3000_common import (
+    DEFAULT_ELEMENTS,
     canonical_enum_token,
     enum_match,
     parse_boolean,
+    parse_nr1,
     strip_response_header,
 )
 from .wt3000_core import WTError, WTSession
@@ -796,3 +807,652 @@ class IntegrationConfig:
                 )
             if poll_interval_s:
                 time.sleep(poll_interval_s)
+
+
+# ===========================================================================
+# Rechengruppe ':MEASure'
+# NEU (ROADMAP M2-1 Punkt 2 und 3, Rang 2 aus ANALYSE_FEHLENDE_FUNKTIONEN.md)
+# ===========================================================================
+#
+# WARUM DIESE GRUPPE ALS ZWEITE KOMMT
+# -----------------------------------
+# Die Analyse (2.2) begruendet es knapp: "Averaging ist in der Praxis fast
+# immer aktiv; ohne Softwarezugriff muss der Anwender es panelseitig
+# vorkonfigurieren und darf es waehrend der Messung nie pruefen/aendern."
+# Anders als ':INTEGrate' ist das keine eigene Betriebsart, sondern eine
+# Eigenschaft JEDER Messung - eine Messreihe mit unbemerkt eingeschaltetem
+# Averaging ueber 64 Zyklen ist eine andere Messung als dieselbe Reihe ohne.
+#
+# WAS HIER GEBAUT IST UND WAS NICHT
+# ---------------------------------
+# Gebaut sind die drei Stellgroessen, die die Analyse namentlich nennt -
+# "Averaging-Ein/Aus und -Zeitkonstante, Effizienzformel-Auswahl,
+# Frequenzmessquelle je Element" - und zwei Skalare, die den Schnappschuss
+# abrunden (SQFormula, SYNChronize).
+#
+# BEWUSST NICHT gebaut, obwohl in derselben Kommandogruppe:
+#
+#   :MEASure:FUNCtion<1..20>  benutzerdefinierte Rechenkanaele. Sie nehmen
+#                             einen AUSDRUCK als Zeichenkette ("UMN(E1)") -
+#                             eine eigene kleine Sprache mit eigener
+#                             Fehlerbehandlung. Das ist ein eigener Schritt,
+#                             kein Nebenprodukt.
+#   :MEASure:PC               Corrected Power nach IEC - eigene Normfrage.
+#   :MEASure:DMeasure         Delta-Berechnung; braucht '/DT' (vorhanden) UND
+#                             passt seine zulaessigen Werte an die Verdrahtung
+#                             an. Gehoert neben die Verdrahtungslogik, nicht
+#                             hierher.
+#   :MEASure:COMPensation     Verdrahtungs- und Wirkungsgradkompensation.
+#   :MEASure:PHASe, :SAMPling, :MHOLd
+#
+# Sie halbfertig mitzunehmen waere schlechter, als sie hier zu benennen.
+
+
+class AveragingType(Enum):
+    """Mittelungsart aus ':MEASure:AVERaging:TYPE' (Handbuch 6-77).
+
+    EXPONENT  exponentiell gleitend - der Wert im Zaehler ist die
+              Daempfungskonstante
+    LINEAR    linearer gleitender Mittelwert - der Wert ist die Anzahl der
+              gemittelten Messungen
+    """
+
+    EXPONENT = "EXPonent"
+    LINEAR = "LINear"
+
+
+class SQFormula(Enum):
+    """Formelsatz fuer Schein- und Blindleistung (':MEASure:SQFormula')."""
+
+    TYPE1 = "TYPE1"
+    TYPE2 = "TYPE2"
+    TYPE3 = "TYPE3"
+
+
+class SyncMode(Enum):
+    """Rolle bei synchronisierter Mehrgeraetemessung (':MEASure:SYNChronize')."""
+
+    MASTER = "MASTer"
+    SLAVE = "SLAVe"
+
+
+AVERAGING_TYPE_TOKENS: frozenset[str] = frozenset(a.value.upper() for a in AveragingType)
+SQFORMULA_TOKENS: frozenset[str] = frozenset(s.value for s in SQFormula)
+SYNC_TOKENS: frozenset[str] = frozenset(s.value.upper() for s in SyncMode)
+
+#: Zulaessige Werte von ':MEASure:AVERaging:COUNt' - je nach TYPE verschieden.
+#
+# Das ist der Grund, warum 'set_averaging()' Art und Zahl GEMEINSAM setzt und
+# nicht als zwei unabhaengige Setter: 128 ist bei LINear richtig und bei
+# EXPonent falsch. Wer beides einzeln setzt, kann durch einen Zwischenzustand
+# laufen, den das Geraet ablehnt - und zwar je nach Reihenfolge.
+AVERAGING_COUNTS: dict[AveragingType, tuple[int, ...]] = {
+    AveragingType.EXPONENT: (2, 4, 8, 16, 32, 64),
+    AveragingType.LINEAR: (8, 16, 32, 64, 128, 256),
+}
+
+#: Marke fuer "kein Wirkungsgrad berechnen" in ':MEASure:EFFiciency:ETA<x>'.
+EFFICIENCY_OFF: str = "OFF"
+
+#: Anzahl der Wirkungsgradgleichungen (eta1..eta4) und der Frequenzmessitems.
+EFFICIENCY_EQUATIONS: int = 4
+FREQUENCY_ITEMS: int = 2
+
+_NODE_AVG_STATE: str = ":MEASure:AVERaging:STATe"
+_NODE_AVG_TYPE: str = ":MEASure:AVERaging:TYPE"
+_NODE_AVG_COUNT: str = ":MEASure:AVERaging:COUNt"
+_NODE_ETA: str = ":MEASure:EFFiciency:ETA"
+_NODE_FREQ_ITEM: str = ":MEASure:FREQuency:ITEM"
+_NODE_SQFORMULA: str = ":MEASure:SQFormula"
+_NODE_SYNC: str = ":MEASure:SYNChronize"
+
+#: Gruppe fuer die Schreibsperre der Rechenfunktionen.
+GROUP_COMPUTATION: str = "COMPUTATION"
+
+
+@dataclass(frozen=True)
+class AveragingSettings:
+    """Zustand der Mittelung - die drei Knoten in einem Datensatz."""
+
+    enabled: bool
+    type: AveragingType
+    count: int
+
+    def describe(self) -> str:
+        """Eine Zeile, die auch im ausgeschalteten Fall etwas aussagt."""
+        if not self.enabled:
+            return f"Averaging:   aus (eingestellt: {self.type.value}, {self.count})"
+        einheit = "Daempfungskonstante" if self.type is AveragingType.EXPONENT else "Messungen"
+        return f"Averaging:   EIN - {self.type.value}, {self.count} ({einheit})"
+
+
+@dataclass(frozen=True)
+class EfficiencyEquation:
+    """Eine Wirkungsgradgleichung eta<x> = Zaehler / Nenner.
+
+    Die Schreibweise des Geraets (Handbuch 6-78) hat zwei Eigenheiten, die
+    hier abgebildet sind statt sie dem Aufrufer zu ueberlassen:
+
+    * 'OFF' heisst: diese Gleichung wird nicht berechnet. Dann ist
+      'denominator' None, und 'enabled' ist False.
+    * Der Zaehler darf fehlen; das Geraet setzt ihn dann auf 1 und LAESST IHN
+      IN DER ANTWORT AUCH WEG ("The numerator is omitted when the numerator is
+      1 in the response to a query"). 'numerator=None' heisst deshalb genau
+      das: der Zaehler ist 1, nicht "unbekannt".
+    """
+
+    numerator: str | None = None
+    denominator: str | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """False, wenn diese Gleichung auf OFF steht."""
+        return self.denominator is not None
+
+    @classmethod
+    def off(cls) -> "EfficiencyEquation":
+        """Die abgeschaltete Gleichung."""
+        return cls(numerator=None, denominator=None)
+
+    def as_parameter(self) -> str:
+        """Als Parameter fuer ':MEASure:EFFiciency:ETA<x>'."""
+        if not self.enabled:
+            return EFFICIENCY_OFF
+        if self.numerator is None:
+            return str(self.denominator)
+        return f"{self.numerator},{self.denominator}"
+
+    def describe(self) -> str:
+        if not self.enabled:
+            return "aus"
+        zaehler = self.numerator if self.numerator is not None else "1"
+        return f"{zaehler} / {self.denominator}"
+
+
+@dataclass(frozen=True)
+class ComputationSettings:
+    """Momentaufnahme der Rechengruppe - Sicherungspunkt und Protokollzeile."""
+
+    averaging: AveragingSettings
+    frequency_items: tuple[str, ...]
+    efficiency: tuple[EfficiencyEquation, ...]
+    sq_formula: SQFormula
+    sync_mode: SyncMode
+
+    def describe(self) -> list[str]:
+        """Als Zeilenliste fuer Protokoll und Konsole."""
+        lines = [self.averaging.describe()]
+        for index, quelle in enumerate(self.frequency_items, start=1):
+            lines.append(f"  Freq{index}:     {quelle}")
+        aktive = [
+            f"eta{i}={eq.describe()}"
+            for i, eq in enumerate(self.efficiency, start=1)
+            if eq.enabled
+        ]
+        lines.append(
+            "  Wirkungsgrad: " + (", ".join(aktive) if aktive else "keine Gleichung aktiv")
+        )
+        lines.append(f"  S/Q-Formel:  {self.sq_formula.value}    Sync: {self.sync_mode.value}")
+        return lines
+
+
+def parse_efficiency(response: str) -> EfficiencyEquation:
+    """Antwort auf ':MEASure:EFFiciency:ETA<x>?' auswerten.
+
+    'PB,PA' -> Zaehler PB, Nenner PA.  'PA' -> Zaehler 1, Nenner PA.
+    'OFF'   -> abgeschaltet. Die Regel steht im Klassendocstring.
+    """
+    text = strip_response_header(response).strip()
+    if not text:
+        raise WTError(f"Leere Antwort auf eine Wirkungsgradgleichung ({response!r})")
+    parts = [teil.strip().upper() for teil in text.split(",")]
+    if parts[0] == EFFICIENCY_OFF:
+        return EfficiencyEquation.off()
+    if len(parts) == 1:
+        return EfficiencyEquation(numerator=None, denominator=parts[0])
+    if len(parts) == 2:
+        return EfficiencyEquation(numerator=parts[0], denominator=parts[1])
+    raise WTError(f"Wirkungsgradgleichung {text!r} hat mehr als zwei Glieder")
+
+
+class ComputationConfig:
+    """Lesen und (gesichertes) Einstellen der Rechenfunktionen (':MEASure').
+
+    Dieselbe doppelte Sperre wie bei 'IntegrationConfig' und wt3000_input:
+    Lesen immer, Schreiben nur mit 'allow_changes=True'. Eine zusaetzlich
+    geschuetzte Gruppe gibt es hier NICHT - anders als ':INTEGrate:RESet'
+    verwirft kein Kommando dieser Gruppe Messwerte. Wer schreiben darf, darf
+    alles darin.
+
+    Zwei Konstruktorangaben bilden Geraeteeigenschaften ab, die dieses Modul
+    nicht selbst erfragen kann (es kennt 'DeviceInfo' nicht - Layer 2):
+
+        elements                bestueckte Elemente, fuer 'P<x>'/'U<x>'/'I<x>'
+        advanced_computation    ist '/G6' verbaut? Nur damit ist SQFormula
+                                TYPE3 waehlbar (Handbuch 6-80)
+        motor                   traegt das Geraet die Motorvariante? Nur dann
+                                ist 'PM' als Wirkungsgradglied zulaessig
+
+    Fuer die beiden Faehigkeiten gilt dieselbe Regel wie in 'DeviceInfo':
+    None heisst UNBEKANNT und wird nicht zur Ablehnung benutzt - lieber laeuft
+    das Kommando ins Geraet und scheitert dort mit dessen eigener Meldung, als
+    dass der Treiber eine vorhandene Faehigkeit sperrt. Die Fassade fuellt
+    beide aus dem Steckbrief.
+    """
+
+    def __init__(
+        self,
+        session: WTSession,
+        allow_changes: bool = False,
+        elements: tuple[int, ...] = DEFAULT_ELEMENTS,
+        advanced_computation: bool | None = None,
+        motor: bool | None = None,
+        verify: bool = True,
+        check_errors: bool = True,
+    ) -> None:
+        self._session = session
+        self._allow_changes = allow_changes
+        self._elements = tuple(elements)
+        self._advanced = advanced_computation
+        self._motor = motor
+        self._verify = verify
+        self._check_errors = check_errors
+
+    # -- Sperre -------------------------------------------------------------
+
+    @property
+    def allow_changes(self) -> bool:
+        """True, wenn dieses Objekt schreiben darf."""
+        return self._allow_changes
+
+    @property
+    def elements(self) -> tuple[int, ...]:
+        """Die bestueckten Elemente, gegen die Parameter geprueft werden."""
+        return self._elements
+
+    def _require_writable(self) -> None:
+        if not self._allow_changes:
+            raise ConfigLocked(
+                "Schreibzugriff auf die Rechenfunktionen abgelehnt: "
+                "ComputationConfig wurde mit allow_changes=False erzeugt."
+            )
+
+    # -- Basisoperationen ---------------------------------------------------
+
+    def _query(self, node: str) -> str:
+        return strip_response_header(self._session.query(f"{node}?"))
+
+    def _write(
+        self,
+        command: str,
+        query_node: str,
+        matches: Callable[[str], bool],
+        label: str,
+    ) -> None:
+        """Derselbe Dreischritt wie in IntegrationConfig: senden, lesen, pruefen."""
+        self._require_writable()
+        _log.info("SET %s", command)
+        self._session.write(command)
+
+        if self._verify:
+            actual = self._query(query_node)
+            if not matches(actual):
+                raise WTError(f"{label}: Geraet meldet {actual!r} nach '{command}'")
+            _log.info("  verifiziert: %s = %s", query_node, actual)
+
+        if self._check_errors:
+            self._session.assert_no_error(label)
+
+    # =======================================================================
+    # Averaging
+    # =======================================================================
+
+    def averaging(self) -> AveragingSettings:
+        """Zustand der Mittelung: ein/aus, Art, Zahl."""
+        return AveragingSettings(
+            enabled=parse_boolean(self._query(_NODE_AVG_STATE), _NODE_AVG_STATE),
+            type=self._averaging_type(),
+            count=parse_nr1(self._query(_NODE_AVG_COUNT), _NODE_AVG_COUNT),
+        )
+
+    def _averaging_type(self) -> AveragingType:
+        token = canonical_enum_token(self._query(_NODE_AVG_TYPE), AVERAGING_TYPE_TOKENS)
+        for kind in AveragingType:
+            if kind.value.upper() == token:
+                return kind
+        raise WTError(
+            f"Unbekannte Mittelungsart {token!r}; erwartet: "
+            f"{', '.join(a.value for a in AveragingType)}"
+        )
+
+    def set_averaging(
+        self,
+        enabled: bool,
+        type: AveragingType | str | None = None,
+        count: int | None = None,
+    ) -> None:
+        """Mittelung setzen - Art und Zahl GEMEINSAM.
+
+        Warum nicht drei einzelne Setter: die zulaessigen Werte von COUNt
+        haengen von TYPE ab (Handbuch 6-76; EXPonent 2..64, LINear 8..256).
+        Wer beides getrennt setzt, laeuft je nach Reihenfolge durch einen
+        Zwischenzustand, den das Geraet ablehnt - '128' ist bei LINear richtig
+        und bei EXPonent falsch. Hier wird das Paar vorher geprueft und dann
+        in der Reihenfolge TYPE, COUNt, STATe geschrieben.
+
+        'type' und 'count' duerfen fehlen; dann bleibt der jeweils
+        eingestellte Wert stehen und nur der Rest wird angefasst.
+        'set_averaging(False)' schaltet also einfach ab.
+        """
+        # Die Sperre wird hier ausnahmsweise VOR der Wertpruefung abgefragt und
+        # nicht erst in '_write()' wie in den uebrigen Settern: fehlt 'type',
+        # muss zuerst die eingestellte Art vom Geraet gelesen werden. Auf einem
+        # gesperrten Objekt waere das eine Abfrage fuer einen Aufruf, der
+        # ohnehin nicht durchgeht.
+        self._require_writable()
+
+        ziel_typ = self._averaging_type() if type is None else self._canonical_type(type)
+        ziel_zahl = count if count is not None else None
+
+        if ziel_zahl is not None:
+            erlaubt = AVERAGING_COUNTS[ziel_typ]
+            if ziel_zahl not in erlaubt:
+                raise WTError(
+                    f"Averaging-Zahl {ziel_zahl} ist bei {ziel_typ.value} unzulaessig; "
+                    f"erlaubt: {', '.join(str(w) for w in erlaubt)}"
+                )
+
+        if type is not None:
+            self._write(
+                f"{_NODE_AVG_TYPE} {ziel_typ.value}",
+                _NODE_AVG_TYPE,
+                lambda actual: enum_match(ziel_typ.value, actual, AVERAGING_TYPE_TOKENS),
+                "Mittelungsart setzen",
+            )
+        if ziel_zahl is not None:
+            self._write(
+                f"{_NODE_AVG_COUNT} {ziel_zahl}",
+                _NODE_AVG_COUNT,
+                lambda actual: parse_nr1(actual, _NODE_AVG_COUNT) == ziel_zahl,
+                "Averaging-Zahl setzen",
+            )
+        self._write(
+            f"{_NODE_AVG_STATE} {'ON' if enabled else 'OFF'}",
+            _NODE_AVG_STATE,
+            lambda actual: parse_boolean(actual, _NODE_AVG_STATE) is enabled,
+            "Averaging schalten",
+        )
+
+    @staticmethod
+    def _canonical_type(type: AveragingType | str) -> AveragingType:
+        if isinstance(type, AveragingType):
+            return type
+        token = canonical_enum_token(str(type), AVERAGING_TYPE_TOKENS)
+        for kind in AveragingType:
+            if kind.value.upper() == token:
+                return kind
+        raise WTError(
+            f"Mittelungsart {type!r} unzulaessig; erlaubt: "
+            f"{', '.join(a.value for a in AveragingType)}"
+        )
+
+    @contextmanager
+    def averaging_disabled(self) -> Iterator["ComputationConfig"]:
+        """Mittelung fuer die Dauer des Blocks abschalten und danach zurueck.
+
+        Der Fall, fuer den es gebaut ist: eine Bereichs- oder Einschwingprobe
+        mitten in einer Messreihe, bei der eine ueber 64 Zyklen gemittelte
+        Anzeige nur stoert. Der Ausgangszustand - ein/aus, Art UND Zahl - wird
+        vorher gelesen und im 'finally' vollstaendig zurueckgeschrieben.
+
+        War die Mittelung ohnehin aus, wird nichts geschrieben.
+        """
+        vorher = self.averaging()
+        if not vorher.enabled:
+            _log.info("Averaging war bereits aus - kein Kommando noetig")
+            yield self
+            return
+
+        self.set_averaging(False)
+        try:
+            yield self
+        finally:
+            self.set_averaging(vorher.enabled, vorher.type, vorher.count)
+            _log.info("Averaging wiederhergestellt: %s", vorher.describe())
+
+    # =======================================================================
+    # Frequenzmessquelle
+    # =======================================================================
+
+    def frequency_item(self, index: int = 1) -> str:
+        """Messquelle von Freq1 bzw. Freq2 - z.B. 'U3' oder 'I1'.
+
+        WICHTIG fuer die Auswertung: das Geraet misst die Frequenz nur an
+        diesen ein bis zwei Quellen. Ein NUMeric-Item 'FU1' liefert deshalb
+        strukturell NAN, wenn Freq1 auf U3 steht - kein Messfehler, sondern
+        eine Folge dieser Einstellung. 'build_standard_profile()' fuehrt FU
+        genau deswegen nur fuer ein Element; bis hierher war diese Zuordnung
+        ein Kommentar, jetzt ist sie abfragbar.
+
+        Auf Geraeten mit der Frequenz-Zusatzoption '/FQ' ist das Kommando
+        laut Handbuch (6-79) UNGUELTIG, weil dort ohnehin alle Elemente
+        gleichzeitig gemessen werden. Das eingemessene Geraet hat '/FQ' nicht
+        ('*OPT?' -> G6,B5,DT,C7,C5,CC), fuer dieses Geraet gilt die Einschraenkung
+        also nicht. Geprueft wird sie hier trotzdem nicht: dieses Modul kennt
+        den Steckbrief nicht, und eine falsche Sperre waere schlimmer als eine
+        Geraetemeldung.
+        """
+        self._require_frequency_index(index)
+        return strip_response_header(self._query(f"{_NODE_FREQ_ITEM}{index}")).upper()
+
+    def set_frequency_item(self, index: int, source: str) -> None:
+        """Messquelle von Freq<index> setzen. Zulaessig: 'U<x>' oder 'I<x>'."""
+        self._require_frequency_index(index)
+        token = self._canonical_frequency_source(source)
+        node = f"{_NODE_FREQ_ITEM}{index}"
+        self._write(
+            f"{node} {token}",
+            node,
+            lambda actual: strip_response_header(actual).strip().upper() == token,
+            f"Frequenzmessquelle {index} setzen",
+        )
+
+    @staticmethod
+    def _require_frequency_index(index: int) -> None:
+        if index not in range(1, FREQUENCY_ITEMS + 1):
+            raise WTError(
+                f"Frequenzmessitem {index} gibt es nicht; das Geraet fuehrt "
+                f"Freq1 bis Freq{FREQUENCY_ITEMS}."
+            )
+
+    def _canonical_frequency_source(self, source: str) -> str:
+        token = str(source).strip().upper()
+        if len(token) < 2 or token[0] not in {"U", "I"} or not token[1:].isdigit():
+            raise WTError(
+                f"Frequenzmessquelle {source!r} unzulaessig; erwartet 'U<x>' oder "
+                "'I<x>' mit <x> = Elementnummer"
+            )
+        self._require_element(int(token[1:]), f"Frequenzmessquelle {source!r}")
+        return token
+
+    # =======================================================================
+    # Wirkungsgrad
+    # =======================================================================
+
+    def efficiency(self, index: int = 1) -> EfficiencyEquation:
+        """Wirkungsgradgleichung eta<index> lesen (1..4)."""
+        self._require_efficiency_index(index)
+        return parse_efficiency(self._query(f"{_NODE_ETA}{index}"))
+
+    def set_efficiency(
+        self,
+        index: int,
+        numerator: str | None = None,
+        denominator: str | None = None,
+    ) -> None:
+        """Wirkungsgradgleichung eta<index> = Zaehler / Nenner setzen.
+
+        Beide Glieder sind eines von: 'P<x>' (Element), 'PA' (P Sigma A),
+        'PB' (P Sigma B), 'PM' (Motorausgang), 'UDEF1'/'UDEF2'.
+
+        'denominator=None' schaltet die Gleichung ab (sendet 'OFF').
+        'numerator=None' bei gesetztem Nenner heisst laut Handbuch: Zaehler
+        ist 1 - dann wird nur der Nenner gesendet.
+        """
+        self._require_efficiency_index(index)
+        if denominator is None:
+            equation = EfficiencyEquation.off()
+        else:
+            equation = EfficiencyEquation(
+                numerator=None if numerator is None else self._canonical_power_term(numerator),
+                denominator=self._canonical_power_term(denominator),
+            )
+        node = f"{_NODE_ETA}{index}"
+        parameter = equation.as_parameter()
+        self._write(
+            f"{node} {parameter}",
+            node,
+            lambda actual: parse_efficiency(actual) == equation,
+            f"Wirkungsgradgleichung {index} setzen",
+        )
+
+    @staticmethod
+    def _require_efficiency_index(index: int) -> None:
+        if index not in range(1, EFFICIENCY_EQUATIONS + 1):
+            raise WTError(
+                f"Wirkungsgradgleichung {index} gibt es nicht; das Geraet fuehrt "
+                f"eta1 bis eta{EFFICIENCY_EQUATIONS}."
+            )
+
+    def _canonical_power_term(self, term: str) -> str:
+        """Ein Glied einer Wirkungsgradgleichung pruefen und normieren.
+
+        Die Einschraenkungen stehen im Handbuch (6-78) und sind
+        geraeteabhaengig: 'PB' gibt es nur auf Vierelementgeraeten, 'PM' nur
+        mit Motorauswertung. Was dieses Modul nicht wissen kann, weist es auch
+        nicht ab - siehe Klassendocstring.
+        """
+        token = str(term).strip().upper()
+        if token in {"UDEF1", "UDEF2"}:
+            return token
+        if token == "PA":
+            if len(self._elements) < 2:
+                raise WTError("'PA' (P SigmaA) gibt es erst ab zwei bestueckten Elementen")
+            return token
+        if token == "PB":
+            if len(self._elements) < 4:
+                raise WTError("'PB' (P SigmaB) gibt es nur auf Vierelementgeraeten")
+            return token
+        if token == "PM":
+            if self._motor is False:
+                raise WTError(
+                    "'PM' (Motorausgang) verlangt die Motorvariante; dieses "
+                    "Geraet meldet sie nicht"
+                )
+            return token
+        if token.startswith("P") and token[1:].isdigit():
+            self._require_element(int(token[1:]), f"Wirkungsgradglied {term!r}")
+            return token
+        raise WTError(
+            f"Wirkungsgradglied {term!r} unzulaessig; erlaubt: P<x>, PA, PB, PM, "
+            "UDEF1, UDEF2"
+        )
+
+    # =======================================================================
+    # Formelsatz und Synchronisation
+    # =======================================================================
+
+    def sq_formula(self) -> SQFormula:
+        """Formelsatz fuer Schein- und Blindleistung."""
+        token = canonical_enum_token(self._query(_NODE_SQFORMULA), SQFORMULA_TOKENS)
+        try:
+            return SQFormula(token)
+        except ValueError as exc:
+            raise WTError(f"Unbekannter S/Q-Formelsatz {token!r}") from exc
+
+    def set_sq_formula(self, formula: SQFormula | str) -> None:
+        """Formelsatz setzen. TYPE3 verlangt die Rechenoption '/G6'."""
+        token = formula.value if isinstance(formula, SQFormula) else str(formula).strip().upper()
+        try:
+            gewaehlt = SQFormula(canonical_enum_token(token, SQFORMULA_TOKENS))
+        except ValueError as exc:
+            raise WTError(
+                f"S/Q-Formelsatz {formula!r} unzulaessig; erlaubt: TYPE1, TYPE2, TYPE3"
+            ) from exc
+        if gewaehlt is SQFormula.TYPE3 and self._advanced is False:
+            raise WTError(
+                "S/Q-Formelsatz TYPE3 verlangt die Rechenoption /G6 (Handbuch 6-80); "
+                "dieses Geraet meldet sie nicht."
+            )
+        self._write(
+            f"{_NODE_SQFORMULA} {gewaehlt.value}",
+            _NODE_SQFORMULA,
+            lambda actual: enum_match(gewaehlt.value, actual, SQFORMULA_TOKENS),
+            "S/Q-Formelsatz setzen",
+        )
+
+    def sync_mode(self) -> SyncMode:
+        """Rolle bei synchronisierter Mehrgeraetemessung."""
+        token = canonical_enum_token(self._query(_NODE_SYNC), SYNC_TOKENS)
+        for mode in SyncMode:
+            if mode.value.upper() == token:
+                return mode
+        raise WTError(f"Unbekannte Synchronisationsrolle {token!r}")
+
+    def set_sync_mode(self, mode: SyncMode | str) -> None:
+        """MASTer oder SLAVe. Betrifft nur den Verbund mehrerer Geraete."""
+        token = mode.value if isinstance(mode, SyncMode) else str(mode)
+        canonical = canonical_enum_token(token, SYNC_TOKENS)
+        if canonical not in SYNC_TOKENS:
+            raise WTError(f"Synchronisationsrolle {mode!r} unzulaessig; erlaubt: MASTer, SLAVe")
+        self._write(
+            f"{_NODE_SYNC} {token}",
+            _NODE_SYNC,
+            lambda actual: enum_match(token, actual, SYNC_TOKENS),
+            "Synchronisationsrolle setzen",
+        )
+
+    # =======================================================================
+    # Momentaufnahme
+    # =======================================================================
+
+    def capture(self) -> ComputationSettings:
+        """Vollstaendige Momentaufnahme der abgedeckten Stellgroessen."""
+        return ComputationSettings(
+            averaging=self.averaging(),
+            frequency_items=tuple(
+                self.frequency_item(i) for i in range(1, FREQUENCY_ITEMS + 1)
+            ),
+            efficiency=tuple(
+                self.efficiency(i) for i in range(1, EFFICIENCY_EQUATIONS + 1)
+            ),
+            sq_formula=self.sq_formula(),
+            sync_mode=self.sync_mode(),
+        )
+
+    def restore(self, settings: ComputationSettings) -> None:
+        """Eine Momentaufnahme zurueckschreiben - Vorlage fuer M2-4."""
+        self.set_averaging(
+            settings.averaging.enabled, settings.averaging.type, settings.averaging.count
+        )
+        for index, quelle in enumerate(settings.frequency_items, start=1):
+            self.set_frequency_item(index, quelle)
+        for index, equation in enumerate(settings.efficiency, start=1):
+            self.set_efficiency(index, equation.numerator, equation.denominator)
+        self.set_sq_formula(settings.sq_formula)
+        self.set_sync_mode(settings.sync_mode)
+
+    def log_summary(self) -> None:
+        """Momentaufnahme ins Protokoll schreiben."""
+        for line in self.capture().describe():
+            _log.info("%s", line)
+
+    # -- gemeinsam ----------------------------------------------------------
+
+    def _require_element(self, element: int, was: str) -> None:
+        """Elementnummer gegen die bestueckte Liste halten."""
+        if element not in self._elements:
+            raise WTError(
+                f"{was}: Element {element} ist nicht bestueckt "
+                f"(bestueckt: {self._elements})"
+            )
