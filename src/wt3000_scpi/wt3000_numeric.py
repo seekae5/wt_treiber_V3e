@@ -296,6 +296,43 @@ def parse_float_block(payload: bytes) -> list[NumericValue]:
     return values
 
 
+def read_numeric_block(
+    session: WTSession,
+    expected_count: int | None = None,
+    strict: bool = True,
+) -> tuple[bytes, list[NumericValue]]:
+    """Wie read_numeric_values(), liefert aber auch die Rohbytes des Blocks.
+
+    NEU (ROADMAP M3-3): Die Dublettenerkennung der Messschleife vergleicht
+    einen Zyklus mit dem vorigen. Sie tut das auf den ROHBYTES und nicht auf
+    den geparsten Werten - aus zwei Gruenden:
+
+      * NaN. Ein Wert ohne Daten kommt als NaN heraus, und NaN != NaN. Ein
+        Vergleich der Wertelisten wuerde jeden Zyklus mit einem einzigen
+        NO_DATA-Wert fuer verschieden erklaeren - also ausgerechnet dort
+        versagen, wo das Geraet gerade nichts liefert.
+      * Genauigkeit. Der Block ist die Antwort des Geraets. Zwei Zyklen sind
+        genau dann derselbe Datensatz, wenn das Geraet dieselben Bytes
+        geschickt hat; jede Umrechnung davor kann nur verlieren.
+
+    Die geparsten Werte kommen mit heraus, damit der Aufrufer den Block nicht
+    ein zweites Mal auswerten muss.
+    """
+    payload = session.query_block(":NUMeric:NORMal:VALue?")
+    values = parse_float_block(payload)
+    if expected_count is not None and len(values) != expected_count:
+        if strict:
+            raise ProtocolError(
+                f"Erwartet: {expected_count} Werte, erhalten: {len(values)}. "
+                "Die Item-Tabelle im Geraet passt nicht zur erwarteten - wurde sie "
+                "am Bedienfeld oder von einer zweiten Sitzung veraendert? "
+                "(strict=False liefert die Werte trotzdem, dann aber ohne "
+                "verlaessliche Spaltenzuordnung.)"
+            )
+        _log.warning("Erwartet: %d Werte, erhalten: %d", expected_count, len(values))
+    return payload, values
+
+
 def read_numeric_values(
     session: WTSession,
     expected_count: int | None = None,
@@ -320,17 +357,11 @@ def read_numeric_values(
 
     strict=False stellt die alte Warnung wieder her. Gedacht fuer Diagnose,
     nicht fuer Messlaeufe.
+
+    UEBERARBEITET (ROADMAP M3-3): duenne Weiterleitung an read_numeric_block().
+    Wer die Rohbytes braucht - die Messschleife tut es fuer die
+    Dublettenerkennung - nimmt jene Funktion; alle uebrigen Aufrufer wollen
+    genau das hier und sollen sich mit dem Block nicht befassen muessen.
     """
-    payload = session.query_block(":NUMeric:NORMal:VALue?")
-    values = parse_float_block(payload)
-    if expected_count is not None and len(values) != expected_count:
-        if strict:
-            raise ProtocolError(
-                f"Erwartet: {expected_count} Werte, erhalten: {len(values)}. "
-                "Die Item-Tabelle im Geraet passt nicht zur erwarteten - wurde sie "
-                "am Bedienfeld oder von einer zweiten Sitzung veraendert? "
-                "(strict=False liefert die Werte trotzdem, dann aber ohne "
-                "verlaessliche Spaltenzuordnung.)"
-            )
-        _log.warning("Erwartet: %d Werte, erhalten: %d", expected_count, len(values))
+    _, values = read_numeric_block(session, expected_count, strict)
     return values

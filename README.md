@@ -13,7 +13,7 @@ Python ≥ 3.10 · keine Laufzeitabhängigkeiten · Version 0.3.0 · **experimen
 |---|---|
 | **Messwerte lesen** — `:NUMeric`, Item-Tabelle, Binärblöcke im FLOat-Format | vollständig |
 | **Messkonfiguration lesen und einstellen** — Verdrahtung, Bereiche, Auto-Range, Crest, Filter, Skalierung, Sync, Modus, Update-Rate; Snapshot mit `capture/save/load/diff/restore` | weitgehend |
-| **Messung aufzeichnen** — blockierende Schleife mit HOLD-Anker, Zeitstempel und CSV | einfach, aber tragfähig |
+| **Messung aufzeichnen** — blockierende Schleife mit HOLD-Anker, Zeitstempel, CSV; Takt gegen `:RATE` geprüft, Wiederholungen als `DUPLICATE` gekennzeichnet | einfach, aber tragfähig |
 | **Gerätekonfiguration jenseits von `:INPut`** — Averaging, Integration, Oberschwingungen, Setup-Speicher | fehlt |
 | **Steuerbare Messung** — `start()`/`stop()`, Gerätesteuerung, Taktung am Gerät | fehlt |
 | **Austauschbarer Export** — andere Formate als CSV, Einheiten an den Daten | fehlt |
@@ -67,7 +67,7 @@ konfigurierten Werkzeuge laufen ohne Argumente und sind **heute vollständig gr�
 ```bash
 ruff check .    # Stil und ungenutzte Namen (E/F/W, Zeilenlänge 100)
 mypy            # Typprüfung über src/, Zielplattform Windows
-pytest          # 241 Fälle, unter einer Sekunde
+pytest          # 670 Fälle, unter einer Sekunde
 ```
 
 Die Einstellungen stehen in [pyproject.toml](pyproject.toml), jeweils mit Begründung —
@@ -271,7 +271,7 @@ Für PyCharm liegen fertige Startkonfigurationen unter [.run/](.run).
 ## Tests
 
 ```bash
-pytest                                  # 241 Tests, unter einer Sekunde
+pytest                                  # 670 Tests, unter einer Sekunde
 pytest tests/test_device_facade.py -v   # nur die Fassade
 ```
 

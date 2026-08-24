@@ -755,6 +755,9 @@ class MeasureControl:
         log_every: int = 0,
         metadata_path: Path | None = None,
         parameters: dict | None = None,
+        # NEU (ROADMAP M3-3): durchgereicht an run_measurement_loop().
+        check_update_rate: bool = True,
+        mark_duplicates: bool = True,
     ) -> LoopStatistics:
         """Messschleife in eine beliebige Senke schreiben.
 
@@ -774,6 +777,15 @@ class MeasureControl:
         wird sie nur weitergereicht. Blockiert bis zum Erreichen eines Limits
         oder bis Strg+C. Ohne Limit laeuft sie unbegrenzt weiter - das ist
         Absicht, aber beim Einbau in fremden Code selten gewollt.
+
+        NEU (ROADMAP M3-3): 'interval_s' ist der Takt DIESER SCHLEIFE und
+        nicht die Rate des Geraets - die steht auf ':RATE' und wird ueber
+        'wt.input.set_update_rate()' gestellt. Beide werden ab jetzt
+        gegeneinander geprueft ('check_update_rate'), und Zyklen, in denen
+        das Geraet nicht aktualisiert hat, sind in der Ausgabe als
+        'SampleMark.DUPLICATE' erkennbar ('mark_duplicates'). Die
+        Dublettenzahl steht in 'LoopStatistics.duplicates', die Zahl echter
+        Messpunkte in 'LoopStatistics.measured_samples'.
         """
         if use_hold and self._read_only:
             _log.warning("Nur-Lesen-Sitzung: Messschleife laeuft ohne HOLD")
@@ -804,6 +816,8 @@ class MeasureControl:
             record_condition=record_condition,
             log_every=log_every,
             metadata=lauf_parameter,
+            check_update_rate=check_update_rate,
+            mark_duplicates=mark_duplicates,
         )
 
     def record_csv(
@@ -819,6 +833,8 @@ class MeasureControl:
         delimiter: str = ",",
         metadata_path: Path | None = None,
         parameters: dict | None = None,
+        check_update_rate: bool = True,
+        mark_duplicates: bool = True,
     ) -> LoopStatistics:
         """Messschleife in eine CSV schreiben - der haeufigste Fall.
 
@@ -838,6 +854,8 @@ class MeasureControl:
             log_every=log_every,
             metadata_path=metadata_path,
             parameters={"csv_file": csv_path.name, **(parameters or {})},
+            check_update_rate=check_update_rate,
+            mark_duplicates=mark_duplicates,
         )
 
 

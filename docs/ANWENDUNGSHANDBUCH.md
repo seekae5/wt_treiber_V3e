@@ -772,6 +772,19 @@ Wichtige optionale Parameter sind `interval_s`, `max_samples`, `max_duration_s`,
 Mindestens ein Limit ist für eingebettete Anwendungen empfehlenswert; ohne Limit läuft
 die Schleife bis `Strg+C`.
 
+**`interval_s` ist der Takt der Schleife, nicht die Rate des Geräts.** Wie oft das
+WT3000 einen neuen Messdatensatz bildet, steht auf `:RATE` und wird über
+`wt.input.set_update_rate()` gestellt. Beide Werte werden seit M3-3 gegeneinander
+geprüft: Ein `interval_s` unterhalb der Geräterate wird beim Start ausdrücklich
+gemeldet, und jeder Zyklus, in dem das Gerät nicht aktualisiert hat, ist in der Ausgabe
+als `SampleMark.DUPLICATE` gekennzeichnet — in der Spalte `status_flags` jeder Senke und
+gezählt in `LoopStatistics.duplicates`. Die Prüfung meldet, sie bricht nicht ab;
+abschaltbar über `check_update_rate=False` bzw. `mark_duplicates=False`.
+
+Faustregel: `interval_s >= :RATE`. Wer bewusst schneller liest, um den Zeitpunkt eines
+Wertwechsels einzugrenzen, tut nichts Falsches — er bekommt die Wiederholungen dann als
+solche gekennzeichnet statt als eigenständige Messpunkte.
+
 ```python
 from pathlib import Path
 
@@ -837,8 +850,8 @@ Spaltenüberschriften geschrieben werden.
 |---|---|
 | `Sample` | Ein Zyklus mit `timestamp`, `elapsed_s`, `number`, `condition`, `values` und `mark`. |
 | `Sample.status_flags(column_names)` | Liefert Auffälligkeiten wie `U2=OVERRANGE`. |
-| `SampleMark` | Zyklusstatus `OK`, vorbereitet außerdem `DUPLICATE` und `MISSING`. |
-| `LoopStatistics` | Enthält `samples`, `overruns`, `cycle_times` und `status_counts`. |
+| `SampleMark` | Zyklusstatus `OK` und `DUPLICATE`; `MISSING` ist vorbereitet (M3-4). |
+| `LoopStatistics` | Enthält `samples`, `overruns`, `duplicates`, `measured_samples`, `update_rate_s`, `cycle_times` und `status_counts`. |
 | `LoopStatistics.log_summary(interval_s)` | Protokolliert Zykluszeiten und Statusverteilung. |
 | `SampleSink` | Protocol für eigene Ausgabesenken mit `open`, `write`, `close`. |
 

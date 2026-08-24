@@ -32,10 +32,18 @@ from typing import Protocol, runtime_checkable
 # UEBERARBEITET (Punkt 4, src-Layout): paketrelative Importe.
 # UEBERARBEITET (Schritt 5b, Befund A-06): parse_condition() fuer die
 # Statusabfrage in der Messschleife.
-from .wt3000_common import parse_condition
+# UEBERARBEITET (ROADMAP M3-3): parse_nr3() fuer ':RATE?' - die Rate des
+# Geraets ist eine NR3-Zahl und wird mit derselben Regel gelesen wie jede
+# andere Zahlenantwort im Paket.
+from .wt3000_common import parse_condition, parse_nr3
 from .wt3000_core import WTError, WTSession
 from .wt3000_itemspec import ItemSpec
-from .wt3000_numeric import ItemTable, NumericValue, ValueStatus, read_numeric_values
+from .wt3000_numeric import (
+    ItemTable,
+    NumericValue,
+    ValueStatus,
+    read_numeric_block,
+)
 
 _log = logging.getLogger("wt3000.measure")
 
@@ -282,15 +290,13 @@ class SampleMark(Enum):
     'SampleMark' bewertet den Zyklus als Ganzes und entsteht erst im Treiber,
     aus dem Vergleich mit dem vorigen Zyklus.
 
-    DUPLICATE und MISSING werden heute von niemandem gesetzt - die Erkennung
-    ist ROADMAP M3-3 bzw. M3-4. Sie stehen hier trotzdem schon, weil M4-1 die
-    Stelle festlegt, an der sie kuenftig transportiert werden; ein Sink, der
-    jetzt gegen 'Sample' gebaut wird, muss dafuer spaeter nicht angefasst
-    werden.
+    UEBERARBEITET (ROADMAP M3-3): DUPLICATE wird seit dem 25.08.2026 von
+    'run_measurement_loop()' gesetzt. MISSING wartet weiterhin auf M3-4.
     """
 
     OK = "OK"
     #: M3-3: bitgleich zum vorigen Zyklus - das Geraet hat nicht aktualisiert.
+    #: Gesetzt von der Messschleife, siehe 'mark_duplicates'.
     DUPLICATE = "DUPLICATE"
     #: M3-4: der Zyklus ist ausgefallen. Ein solcher Datensatz traegt keine
     #: Werte; er steht in der Ausgabe, damit die Luecke sichtbar bleibt,
@@ -502,15 +508,43 @@ class LoopStatistics:
 
     samples: int = 0
     overruns: int = 0
+    #: NEU (ROADMAP M3-3): Zyklen, die bitgleich zum vorigen waren - das
+    #: Geraet hatte noch nicht aktualisiert. Sie stehen mit in 'samples',
+    #: denn gelesen wurden sie; gemessen wurden sie nicht.
+    duplicates: int = 0
+    #: NEU (ROADMAP M3-3): ':RATE?' zu Beginn des Laufs, None wenn nicht
+    #: ermittelbar. Gehoert zum Ergebnis, weil sich ohne diesen Wert nicht
+    #: beurteilen laesst, ob die Dublettenzahl erwartbar war.
+    update_rate_s: float | None = None
     cycle_times: list[float] = field(default_factory=list)
     status_counts: dict[ValueStatus, int] = field(
         default_factory=lambda: {s: 0 for s in ValueStatus}
     )
 
+    @property
+    def measured_samples(self) -> int:
+        """Datensaetze ohne die Dubletten - die Zahl echter Messpunkte."""
+        return self.samples - self.duplicates
+
     def log_summary(self, interval_s: float) -> None:
         """Zusammenfassung ausgeben."""
         _log.info("=" * 78)
         _log.info("Samples: %d, Overruns: %d", self.samples, self.overruns)
+        # NEU (ROADMAP M3-3): Die Dublettenzahl steht bewusst NEBEN der Rate.
+        # '40 Dubletten' allein sagt nichts; '40 Dubletten bei :RATE 1 s und
+        # 0.5 s Takt' sagt, dass die Messreihe planmaessig doppelt gelesen hat.
+        if self.duplicates:
+            _log.warning(
+                "Dubletten: %d von %d Datensaetzen (%.1f %%) - echte Messpunkte: %d"
+                "%s",
+                self.duplicates,
+                self.samples,
+                100.0 * self.duplicates / self.samples if self.samples else 0.0,
+                self.measured_samples,
+                ""
+                if self.update_rate_s is None
+                else f", Geraeterate :RATE {self.update_rate_s:g} s bei {interval_s:g} s Takt",
+            )
         if self.cycle_times:
             _log.info(
                 "Zykluszeit min/median/max: %.3f / %.3f / %.3f s (Soll %.3f s)",
@@ -525,6 +559,103 @@ class LoopStatistics:
                 _log.info("  %-10s %6d  (%.1f %%)", status.value, count, 100.0 * count / total)
 
 
+# ---------------------------------------------------------------------------
+# NEU (ROADMAP M3-3): Taktkopplung
+# ---------------------------------------------------------------------------
+#
+# Das Geraet aktualisiert seinen Messdatensatz im Takt von ':RATE' - 0.05 bis
+# 20 s, eingestellt ueber InputConfig.set_update_rate(). Die Messschleife
+# liest im Takt von 'interval_s'. Bis hierher waren das zwei voneinander
+# unabhaengige Zahlen: wer mit 0.1 s gegen ein Geraet mit ':RATE 2 s' misst,
+# bekam zwanzig identische Datensaetze je Messwert - alle als gueltig
+# gekennzeichnet, ohne eine einzige Warnung. Die Datei sah danach aus wie eine
+# Messreihe mit 20facher Aufloesung und war eine mit 20facher Wiederholung.
+#
+# Zwei Dinge greifen ab jetzt ineinander:
+#
+#   1. VORHER. Der Takt wird beim Start gegen ':RATE?' geprueft und eine
+#      Unterschreitung ausdruecklich benannt (check_sample_interval).
+#   2. WAEHREND. Jeder Zyklus wird mit dem vorigen verglichen; ein bitgleicher
+#      bekommt SampleMark.DUPLICATE (run_measurement_loop).
+#
+# Warum beides und nicht nur eines: Punkt 1 allein waere Raterei - er sagt
+# vorher, was zu erwarten ist, nicht was eingetreten ist. Punkt 2 allein
+# kaeme zu spaet, naemlich erst in der fertigen Datei. Und Punkt 2 faengt
+# ausserdem den Fall, den Punkt 1 gar nicht sehen kann: Takt gleich Rate, aber
+# phasenverschoben - dann liefert das Geraet abwechselnd denselben und einen
+# neuen Datensatz, obwohl beide Zahlen zueinander passen.
+
+
+#: Toleranz beim Vergleich von Takt und Geraeterate.
+#
+# Reine Rechengenauigkeit, keine fachliche Groesse: 0.5 gegen 0.5 darf nicht
+# an der Binaerdarstellung scheitern. Eine echte Unterschreitung liegt immer
+# um Groessenordnungen darueber - die Stufenliste des Geraets kennt keine
+# zwei Werte, die naeher als Faktor zwei beieinander lagen.
+RATE_TOLERANCE: float = 1e-6
+
+
+def device_update_rate(session: WTSession) -> float | None:
+    """':RATE?' lesen. None, wenn das Geraet die Frage nicht beantwortet.
+
+    NEU (ROADMAP M3-3). Bewusst FEHLERTOLERANT, und das ist hier die
+    unbequemere Entscheidung: diese Abfrage dient einer Plausibilitaetspruefung,
+    und eine Messreihe an einer fehlgeschlagenen Plausibilitaetspruefung
+    scheitern zu lassen, waere die falsche Rangfolge. Wer messen will, soll
+    messen - er soll nur wissen, was er tut.
+
+    Die Behandlung folgt dem Vorbild von 'DeviceInfo.read()' fuer '*IDN?':
+    protokollieren, 'drain_after_failure()', weiterarbeiten. Das
+    Nachraeumen ist hier genauso wenig Kosmetik wie dort - die naechste
+    Abfrage in dieser Sitzung ist der erste Messwertblock, und eine
+    verspaetete ':RATE'-Antwort davor wuerde ihn um eine Position verschieben.
+    """
+    try:
+        return parse_nr3(session.query(":RATE?"), "Update-Rate")
+    except WTError as error:
+        _log.warning(
+            ":RATE? fehlgeschlagen: %s - der Takt wird ungeprueft uebernommen; "
+            "Dubletten werden weiterhin erkannt",
+            error,
+        )
+        session.drain_after_failure()
+        return None
+
+
+def check_sample_interval(interval_s: float, rate_s: float | None) -> None:
+    """Takt gegen die Geraeterate pruefen und eine Unterschreitung benennen.
+
+    NEU (ROADMAP M3-3). Meldet, ABER BRICHT NICHT AB. Der Grund steht in
+    'SampleMark.DUPLICATE': seit die Dubletten gekennzeichnet werden, sind zu
+    schnell gelesene Daten nicht mehr falsch, sondern nur redundant - und
+    Redundanz ist eine legitime Wahl. Wer bewusst schneller liest, um den
+    Zeitpunkt des Wechsels genauer einzugrenzen, tut etwas Sinnvolles.
+
+    Das unterscheidet diesen Fall von 'read_numeric_values(strict=True)', das
+    sehr wohl abbricht: dort verrutschen Spalten, und verrutschte Spalten
+    ergeben still falsche Daten. Hier sind die Daten richtig, es sind nur
+    mehr, als das Geraet neu gebildet hat.
+    """
+    if rate_s is None or rate_s <= 0.0:
+        return
+    if interval_s >= rate_s * (1.0 - RATE_TOLERANCE):
+        return
+    faktor = rate_s / interval_s if interval_s > 0 else float("inf")
+    _log.warning(
+        "Takt %.3f s liegt unter der Geraeterate :RATE %.3f s - das Geraet "
+        "bildet nur alle %.3f s einen neuen Datensatz. Es ist mit rund %s "
+        "Lesevorgaengen je echtem Messpunkt zu rechnen; die Wiederholungen "
+        "werden als SampleMark.DUPLICATE gekennzeichnet. Abhilfe: "
+        "interval_s >= %.3f setzen oder die Geraeterate ueber "
+        "InputConfig.set_update_rate() verkleinern.",
+        interval_s,
+        rate_s,
+        rate_s,
+        "unendlich vielen" if faktor == float("inf") else f"{faktor:.1f}",
+        rate_s,
+    )
+
+
 def run_measurement_loop(
     session: WTSession,
     table: ItemTable,
@@ -536,6 +667,10 @@ def run_measurement_loop(
     record_condition: bool,
     log_every: int,
     metadata: Mapping[str, object] | None = None,
+    # NEU (ROADMAP M3-3): Taktkopplung und Dublettenerkennung. Beide in der
+    # Voreinstellung AN - wer sie abschaltet, soll das ausdruecklich tun.
+    check_update_rate: bool = True,
+    mark_duplicates: bool = True,
 ) -> LoopStatistics:
     """Messschleife mit driftfreier Taktung.
 
@@ -553,6 +688,25 @@ def run_measurement_loop(
     baut die Senke also nur noch, statt ihren Lebenszyklus zu fuehren.
     Nebenwirkung, die man kennen muss: nach einem Lauf ist die Senke
     geschlossen; zwei Messreihen in eine Datei gehen so nicht.
+
+    NEU (ROADMAP M3-3): TAKT UND GERAETERATE haengen ab jetzt zusammen.
+    'check_update_rate' liest ':RATE?' vor dem ersten Zyklus und benennt einen
+    zu schnellen Takt; 'mark_duplicates' vergleicht jeden Zyklus mit dem
+    vorigen und kennzeichnet einen bitgleichen als 'SampleMark.DUPLICATE'.
+    Gezaehlt werden sie in 'LoopStatistics.duplicates', ausgewiesen in der
+    Spalte 'status_flags' jeder Senke.
+
+    Eine Dublette wird AUFGEZEICHNET und nicht verworfen. Sie ist eine
+    Beobachtung: das Geraet hatte zu diesem Zeitpunkt nichts Neues. Wer sie
+    nicht braucht, filtert sie beim Auswerten ueber 'mark' heraus - wer sie
+    braucht, um den Zeitpunkt eines Wechsels einzugrenzen, faende sie nach
+    einem Verwurf nie wieder. Weggeworfene Datensaetze sind ausserdem der
+    einzige Fehler dieser Klasse, der sich hinterher nicht mehr beheben laesst.
+
+    Die ermittelte Geraeterate geht MIT IN DIE METADATEN der Senke, unter
+    'update_rate_s'. Ohne sie ist die Dublettenzahl in der fertigen Datei
+    nicht zu beurteilen: erst das Verhaeltnis von Takt zu Rate sagt, ob 40
+    Dubletten der Plan waren oder ein Befund.
 
     OFFEN (ROADMAP M3-1): Diese Funktion wird der Rumpf der Klasse
     'Measurement'. Drei Stellen sind dabei anzupassen und nicht bloss zu
@@ -582,6 +736,13 @@ def run_measurement_loop(
     dabei nicht mehr.
     """
     stats = LoopStatistics()
+
+    # NEU (ROADMAP M3-3): VOR dem Oeffnen der Senke - die Rate gehoert in die
+    # Metadaten, und die Metadaten gehen mit 'open()' hinaus.
+    if check_update_rate:
+        stats.update_rate_s = device_update_rate(session)
+        check_sample_interval(interval_s, stats.update_rate_s)
+
     started_monotonic = time.monotonic()
     next_tick = started_monotonic
     # UEBERARBEITET (M4-1): hiess 'sample'. Der Name ist an den Typ 'Sample'
@@ -591,13 +752,20 @@ def run_measurement_loop(
     # NEU (M4-2): Die Spaltennamen entstehen hier und nicht mehr beim Aufrufer -
     # sie stehen in der Item-Tabelle, gegen die auch gemessen wird. Damit koennen
     # Kopf und Daten gar nicht mehr aus verschiedenen Quellen stammen.
-    sink.open([item.key for item in table.items], metadata or {})
+    # UEBERARBEITET (ROADMAP M3-3): Die Geraeterate kommt zu den Angaben des
+    # Aufrufers dazu. Sie wird NICHT ueberschrieben, falls der Aufrufer sie
+    # selbst gesetzt hat - seine Angabe ist die aeltere Zusage.
+    ausgabe_metadaten: dict[str, object] = dict(metadata or {})
+    ausgabe_metadaten.setdefault("update_rate_s", stats.update_rate_s)
+
+    sink.open([item.key for item in table.items], ausgabe_metadaten)
     try:
         return _loop_body(
             session=session,
             table=table,
             sink=sink,
             stats=stats,
+            mark_duplicates=mark_duplicates,
             started_monotonic=started_monotonic,
             next_tick=next_tick,
             number=number,
@@ -620,6 +788,7 @@ def _loop_body(
     table: ItemTable,
     sink: SampleSink,
     stats: LoopStatistics,
+    mark_duplicates: bool,
     started_monotonic: float,
     next_tick: float,
     number: int,
@@ -631,6 +800,10 @@ def _loop_body(
     log_every: int,
 ) -> LoopStatistics:
     """Die eigentliche Schleife. Getrennt, damit 'finally' oben lesbar bleibt."""
+    # NEU (ROADMAP M3-3): der Rohblock des vorigen Zyklus. Nur er entscheidet
+    # ueber eine Dublette - zur Begruendung siehe read_numeric_block().
+    previous_payload: bytes | None = None
+
     with NumericHold(session, enabled=use_hold) as hold:
         try:
             while True:
@@ -653,7 +826,29 @@ def _loop_body(
                 # auf den Moment des HOLD ON, nicht auf den Antworteingang.
                 hold.refresh()
                 timestamp = datetime.now(timezone.utc).astimezone()
-                values = read_numeric_values(session, expected_count=len(table.items))
+                # UEBERARBEITET (ROADMAP M3-3): derselbe Lesevorgang, aber
+                # mit den Rohbytes - sie sind die Grundlage des Vergleichs.
+                payload, values = read_numeric_block(
+                    session, expected_count=len(table.items)
+                )
+
+                mark = SampleMark.OK
+                if mark_duplicates:
+                    if previous_payload is not None and payload == previous_payload:
+                        mark = SampleMark.DUPLICATE
+                        stats.duplicates += 1
+                        # Gestaffelt wie die Overrun-Meldung: die erste
+                        # Dublette ist eine Nachricht, die tausendste ist
+                        # Laerm. Ueber Stunden bleibt das Protokoll lesbar,
+                        # ohne dass der Befund untergeht.
+                        if stats.duplicates in (1, 10, 100) or stats.duplicates % 500 == 0:
+                            _log.warning(
+                                "Zyklus %d ist bitgleich zum vorigen - das Geraet hat "
+                                "nicht aktualisiert. Dubletten bisher: %d",
+                                number + 1,
+                                stats.duplicates,
+                            )
+                    previous_payload = payload
 
                 condition: int | None = None
                 if record_condition:
@@ -685,6 +880,7 @@ def _loop_body(
                         number=number,
                         condition=condition,
                         values=values,
+                        mark=mark,
                     )
                 )
 

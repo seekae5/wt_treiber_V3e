@@ -328,6 +328,8 @@ def messschleifen_antworten(zyklen: int) -> dict:
         ":NUMeric:HOLD?": "0",
         ":NUMeric:NORMal:VALue?": bloecke,
         ":STATus:CONDition?": "16",
+        # NEU (ROADMAP M3-3): Geraeterate fuer die Taktpruefung der Schleife.
+        ":RATE?": "1.000E+00",
     }
 
 
@@ -508,7 +510,12 @@ def test_messschleife_bricht_bei_verschobener_item_tabelle_ab(tmp_path):
 def test_hold_wird_auch_bei_einem_fehler_mitten_im_zyklus_abgeschaltet():
     """Bleibt HOLD aktiv, liefert das Geraet in der Folgesitzung Altwerte."""
     transport, sess = session(
-        {":NUMeric:HOLD?": "0", ":NUMeric:NORMal:VALue?": float_block([1.0])},
+        {
+            ":NUMeric:HOLD?": "0",
+            ":NUMeric:NORMal:VALue?": float_block([1.0]),
+            # NEU (ROADMAP M3-3): Taktpruefung der Schleife.
+            ":RATE?": "1.000E+00",
+        },
         fail_commands=[":NUMeric:NORMal:VALue?"],
     )
     tabelle = ItemTable.from_response("1;U,1")

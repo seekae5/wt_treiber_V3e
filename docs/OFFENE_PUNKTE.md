@@ -1,7 +1,7 @@
 # Offene Punkte — geprüfter Stand 2026-08-20
 
 **Projekt:** `wt3000-scpi 0.3.0`  
-**Basis:** aktueller Quellstand, 282 bestandene Tests, Ruff und Mypy ohne Befund  
+**Basis:** aktueller Quellstand, 670 bestandene Tests, Ruff und Mypy ohne Befund  
 **Abgrenzung:** Geräteverhalten ist nur dort als belegt bezeichnet, wo der Bestand
 einen konkreten Geräteversuch dokumentiert.
 
@@ -110,6 +110,18 @@ Messwerte. `require_matching_columns()` lehnt ihn deshalb ab.
 Spaltenzahl aufgefüllt werden. Das erhält die strenge Datenintegritätsregel und ist der
 bevorzugte Weg, solange kein Gerätebeleg dagegen spricht.
 
+### S-10 — Ereignisgesteuertes Lesen fehlt weiterhin
+
+Seit M3-3 (25.08.2026) erkennt die Messschleife Dubletten und prüft ihren Takt gegen
+`:RATE`. Damit ist ein zu schnelles Lesen **erkennbar**, aber nicht **vermieden**: die
+Schleife wartet weiterhin eine feste Zeit, statt auf ein Aktualisierungsereignis des
+Geräts zu warten.
+
+**Ziel:** Nach H-05/M0-5 entscheiden, ob ein belegtes Ereignis (`:STATus:CONDition?`,
+Extended Event Register, Serial Poll) den festen Takt ersetzen kann. Die
+Dublettenerkennung bleibt in jedem Fall — sie deckt den Fall „Takt gleich Rate, aber
+phasenverschoben“ ab, den keine Ereignissteuerung überflüssig macht.
+
 ### S-09 — Auslieferung ist nur teilweise abgeschlossen
 
 Vorhanden sind `pyproject.toml`, Test- und Entwicklungsgruppen, Ruff, Mypy,
@@ -139,10 +151,11 @@ Die folgenden Aussagen aus den entfernten Momentaufnahmen sind nicht mehr offen:
 | Blockheader erzeugt nackte `ValueError` | P-4: vollständige Validierung als `ProtocolError` |
 | Installation und Python-Version seien nicht deklariert | `pyproject.toml` mit Python ≥ 3.10 und Abhängigkeitsgruppen ist vorhanden |
 | Verbindungsdaten seien feste Quellcodewerte | P-7: Parameter, Umgebung und JSON-Konfiguration; neutrale Defaults |
-| Tests liefen lokal nicht | Projektumgebung vorhanden; 282 Tests aktuell ausgeführt |
+| Tests liefen lokal nicht | Projektumgebung vorhanden; 670 Tests aktuell ausgeführt |
 | Kein Linting, keine Typprüfung, gemischte Zeilenenden | Ruff, Mypy und `.gitattributes` sind eingerichtet |
 | `wt3000_core.py` enthalte einen großen auskommentierten Transportklon | Kommentarbereinigung abgeschlossen |
 | Export sei fest an CSV gekoppelt | M4-1/M4-2: `Sample`, `SampleSink` und vier Senken |
+| Schleifentakt und Geräterate seien unverbunden, Dubletten unerkennbar | M3-3: Taktprüfung vorab, `SampleMark.DUPLICATE` während des Laufs, Rate in den Metadaten |
 
 ---
 

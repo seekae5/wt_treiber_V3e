@@ -4,7 +4,7 @@
 
 **Abgeschlossen:** M1-1, M1-2, M4-1, M4-2 sowie die Befundpakete P-1…P-8
 
-**Prüfstand:** 282 Tests, Ruff und Mypy ohne Befund
+**Prüfstand:** 670 Tests, Ruff und Mypy ohne Befund
 
 **Bezug:** [OFFENE_PUNKTE.md](OFFENE_PUNKTE.md) ·
 [AENDERUNGEN_2026-08-18.md](AENDERUNGEN_2026-08-18.md)
@@ -29,9 +29,9 @@ Die Kommandoübersicht ist eine Geräte- und keine Implementierungsübersicht.
 | Gerätekonfiguration lesen | `DeviceInfo` liest Identifikation, Verdrahtung, Modultypen und Bestückung; Metadatenabzug liest weitere Gruppen roh | strukturierter Snapshot für Kommunikation, Averaging, Frequenzquelle, Integration, Harmonische und System | **30 %** |
 | Gerätekonfiguration einstellen | sichere Schreib- und Restoremuster für Item-Tabelle, Bereiche und Eingangskonfiguration | Gerätegruppen jenseits `:INPut`, ein gemeinsames Backup, Setup-Speicher | **15 %** |
 | Messkonfiguration | `InputConfig`, `RangePlan`, Snapshots, Diff und Restore | geräteabhängige Element-/Bereichstabellen, `InputPlan`, Eingangsart und unabhängiger Modus setzen | **75 %** |
-| Messsteuerung | blockierende Messschleife, HOLD, driftfreie Taktung, Statistik, `Sample` | start-/stoppbares Objekt, Generator, Geräteintegration, Ereignistakt, Wiederverbindung | **35 %** |
+| Messsteuerung | blockierende Messschleife, HOLD, driftfreie Taktung, Taktkopplung und Dublettenerkennung, Statistik, `Sample` | start-/stoppbares Objekt, Generator, Geräteintegration, Ereignistakt, Wiederverbindung | **45 %** |
 | Datenexport | `SampleSink`, CSV, JSONL, Callback und Bündel; strenge Spaltenregel | Einheiten, verbindliche Metadaten, Rotation und Fortsetzung | **80 %** |
-| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 282 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
+| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 670 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
 
 Die Fassade und der austauschbare Export sind nicht mehr Zielbild, sondern Bestand.
 Der Schwerpunkt liegt jetzt auf Hardwarebelegen, vollständiger Konfiguration und einer
@@ -46,7 +46,7 @@ steuerbaren Langzeitmessung.
 | M0 — Gerätefragen | **teilweise** | ein protokollierter Gerätetermin; Spannungssyntax ist bereits belegt |
 | M1 — Fundament | **teilweise** | M1-3 bis M1-5 |
 | M2 — Konfiguration | **teilweise** | M2-1 zur Hälfte und M2-4 umgesetzt; offen: M2-2, M2-3, M2-5 |
-| M3 — Messsteuerung | **teilweise** | M3-2 Integration umgesetzt; Sitzungsbesitz entscheiden, danach M3-1 |
+| M3 — Messsteuerung | **teilweise** | M3-2 Integration und M3-3 Ersatzweg umgesetzt; Sitzungsbesitz entscheiden, danach M3-1 |
 | M4 — Export | **teilweise** | M4-3 Einheiten und Metadaten |
 | M5 — Auslieferung | **teilweise** | CLI, Paketmetadaten und CI |
 
@@ -307,11 +307,35 @@ an ein Ausgabeformat angepasst werden.
 ausgelesen werden kann. — Der Weg dorthin ist gebaut und gerätefrei durchgespielt;
 zum Abhaken fehlt der Lauf am realen Gerät.
 
-### M3-3 — Gerätetakt statt blindem `sleep` `M`
+### M3-3 — Gerätetakt statt blindem `sleep` `M` — **Ersatzweg umgesetzt 2026-08-25**
 
-Abhängig von M0-5: bevorzugt auf ein belegtes Aktualisierungsereignis warten,
-andernfalls Dubletten erkennen und mit `SampleMark.DUPLICATE` kennzeichnen. Die
-vorhandene driftfreie Taktung und Overrun-Statistik bleiben erhalten.
+Der Meilenstein nannte zwei Wege: bevorzugt auf ein belegtes Aktualisierungsereignis
+warten, **andernfalls** Dubletten erkennen und mit `SampleMark.DUPLICATE` kennzeichnen.
+Der zweite Weg ist gebaut, der erste hängt unverändert an M0-5.
+
+- [x] **Taktkopplung.** `run_measurement_loop()` liest `:RATE?` vor dem ersten Zyklus
+  und benennt einen Takt, der die Geräterate unterschreitet — mit beiden Zahlen, dem
+  zu erwartenden Wiederholungsfaktor und dem Weg zur Abhilfe. Die Prüfung meldet, sie
+  bricht **nicht** ab: seit die Wiederholungen gekennzeichnet sind, sind zu schnell
+  gelesene Daten nicht falsch, sondern redundant — und Redundanz ist eine zulässige
+  Wahl. Abschaltbar über `check_update_rate=False`.
+- [x] **Dublettenerkennung.** Jeder Zyklus wird mit dem vorigen verglichen; ein
+  bitgleicher bekommt `SampleMark.DUPLICATE`, erscheint in der Spalte `status_flags`
+  jeder Senke und wird in `LoopStatistics.duplicates` gezählt.
+  `LoopStatistics.measured_samples` nennt die Zahl echter Messpunkte. Abschaltbar über
+  `mark_duplicates=False`.
+- [x] **Vergleich auf Rohbytes**, nicht auf geparsten Werten — `read_numeric_block()`.
+  Ein Wert ohne Daten wird zu NaN, und `NaN != NaN`; ein Vergleich der Wertelisten
+  hätte ausgerechnet dann versagt, wenn das Gerät nichts liefert.
+- [x] **Geräterate in den Metadaten** (`update_rate_s`) und damit in JSONL und Sidecar.
+  Ohne sie ist eine Dublettenzahl in der fertigen Datei nicht zu beurteilen.
+- [ ] Ereignisgesteuertes Warten statt fester Taktung — bleibt offen, **hängt an M0-5**.
+
+Die vorhandene driftfreie Taktung und die Overrun-Statistik sind unverändert.
+
+**Fertig, wenn:** für den Ersatzweg erfüllt — eine Messreihe, die schneller liest, als
+das Gerät aktualisiert, ist in der Ausgabedatei ohne Zusatzwissen als solche erkennbar.
+Der bevorzugte Weg bleibt bis zum Gerätetermin offen.
 
 ### M3-4 — Verbindungsabbruch überleben `M`
 

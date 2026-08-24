@@ -276,6 +276,11 @@ def messschleifen_antworten(zyklen: int) -> dict:
         ":NUMeric:HOLD?": "0",
         ":NUMeric:NORMal:VALue?": bloecke,
         ":STATus:CONDition?": "16",
+        # NEU (ROADMAP M3-3): die Messschleife fragt die Geraeterate ab, um
+        # den Takt dagegen zu pruefen. Der Eintrag fehlte hier - und dass er
+        # gefehlt hat, hat FakeTransport gemeldet statt still etwas zu
+        # erfinden. Genau dafuer gibt es die KeyError-Regel.
+        ":RATE?": "1.000E+00",
     }
 
 
@@ -326,7 +331,11 @@ def test_zweites_format_ohne_eine_zeile_aenderung_an_der_schleife(tmp_path):
     assert stats.samples == 3
     # Die Schleife hat die Senke in Betrieb genommen und wieder abgeraeumt.
     assert senke.columns == ["U1", "I1", "P1"]
-    assert senke.metadata == {"sample_interval_s": 0.0}
+    # UEBERARBEITET (ROADMAP M3-3): Die Angaben des Aufrufers gehen unveraendert
+    # durch; die Schleife legt die gelesene Geraeterate dazu. Ohne sie laesst
+    # sich in der fertigen Datei nicht beurteilen, ob eine Dublettenzahl
+    # planmaessig war.
+    assert senke.metadata == {"sample_interval_s": 0.0, "update_rate_s": 1.0}
     assert senke.geschlossen
     # Und sie hat genau die Datensaetze bekommen, die gemessen wurden.
     assert [s.number for s in senke.samples] == [1, 2, 3]
