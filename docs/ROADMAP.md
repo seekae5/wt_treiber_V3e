@@ -70,18 +70,33 @@ konkretem Bedarf umgesetzt.
 | M3-1 | `Measurement` mit `start()`, `stop()`, `wait()`, Status und Fehlerweitergabe; außerdem `stream()` | erledigt 25.08.2026 |
 | M3-2 | Integration starten/stoppen und passendes Messprofil | Softwarepfad erledigt; Geräteabnahme offen |
 | M3-3 | Geräterate berücksichtigen und Dubletten erkennen | Ersatzweg erledigt; Ereignissteuerung offen |
-| M3-4 | Kommunikationsabbrüche überleben | offen |
+| M3-4 | Kommunikationsabbrüche überleben | erledigt 25.08.2026 |
 
-Für M3-4 sind vorgesehen:
+M3-4 ist über `ErrorPolicy` umgesetzt — als **Opt-in**: ohne Policy beendet ein
+Kommunikationsfehler den Lauf wie bisher. Eine Bibliothek darf Ausnahmen nicht
+ungefragt in Datenzeilen verwandeln; wer Nachsicht will, vereinbart sie
+(`ErrorPolicy.unattended()` ist die fertige Voreinstellung dafür).
 
-- fehlgeschlagenen Zyklus als `SampleMark.MISSING` erfassen,
-- Werte mit `NO_DATA` auf die feste Spaltenzahl auffüllen,
-- nach konfigurierbarer Fehlerzahl neu verbinden,
-- Item-Tabelle, Bereiche und Protokollzustand vor Fortsetzung prüfen,
-- nach zu vielen Fehlern sauber abbrechen.
+- [x] fehlgeschlagenen Zyklus als `SampleMark.MISSING` erfassen,
+- [x] Werte mit `NO_DATA` auf die feste Spaltenzahl auffüllen — löst den
+  Zielkonflikt aus S-08, ohne die strenge Spaltenregel anzutasten,
+- [x] nach konfigurierbarer Fehlerzahl neu verbinden (`reconnect_after`), begrenzt
+  durch `max_reconnects`; der Transport zeigt die Fähigkeit über
+  `ReconnectableTransport` an, ein Transport ohne sie misst ohne Neuaufbau weiter,
+- [x] Zahlenformat, Header und Item-Tabelle vor der Fortsetzung prüfen
+  (`verify_after_reconnect()`) — eine Abweichung beendet den Lauf, statt Zeilen
+  unter falschen Spalten fortzuschreiben,
+- [x] nach zu vielen Fehlern sauber abbrechen (`max_consecutive`, `max_total`) mit
+  `MeasurementAborted`; die auslösende Zeile steht noch in der Datei.
 
-M3-4 benötigt M1-5 und M2-4 und ist die zentrale Voraussetzung für
-unbeaufsichtigte Langzeitmessungen.
+Als Kommunikationsfehler gelten ausschließlich `TmctlError` und `ProtocolError`.
+Aufruffehler (`ReadOnlyViolation`, `ConcurrentAccessError`) und `DeviceError` fallen
+nicht darunter — sie durch Wiederholen zu übergehen hieße, sie zu verstecken.
+
+**Offen bleibt** die Abnahme am realen Gerät: gerätefrei ist der Abriss abgedeckt,
+der echte (Kabel, Stromausfall, Firmware-Neustart) nicht. Die frühere Abhängigkeit
+von M1-5 bestand nicht — M3-4 braucht nur `drain_after_failure()`, und das ist
+vorhanden.
 
 ### M4 — Datenexport
 
@@ -129,7 +144,6 @@ M0-4/M0-6 -> M2-5 -> weitere Konfigurationsgruppen
 M0-1/M0-2 -> M2-3
 M0-3       -> Geräteabnahme M3-2
 M0-5       -> Ereignisweg M3-3
-M1-5       -> M3-4
 M4-3       -> M4-4
 ```
 
@@ -137,8 +151,8 @@ Empfohlene Reihenfolge:
 
 1. M0 als gebündelter Gerätetermin,
 2. M2-5 für eindeutige Parser- und Scope-Regeln,
-3. M1-5 und M3-4 für robuste Langzeitmessungen,
-4. M4-3/M4-4 für dauerhaft interpretierbare Dateien,
+3. M4-3/M4-4 für dauerhaft interpretierbare Dateien,
+4. M1-5 für eine durchgängige Fehlersemantik an den Paketgrenzen,
 5. M5 für CLI, CI und Auslieferung.
 
 ## Bewusst nicht im Kernumfang

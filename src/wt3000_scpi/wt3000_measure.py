@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import logging
+# Fuer den NaN eines ausgefallenen Zyklus, siehe missing_values().
+import math
 import statistics
 # Hintergrundlauf und Stoppsignal gehoeren zur Messschleife, nicht zur Fassade.
 import threading
@@ -17,10 +19,11 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol, runtime_checkable
 
-from .wt3000_common import parse_condition, parse_nr3
-from .wt3000_core import WTError, WTSession
+from .wt3000_common import parse_condition, parse_nr3, strip_response_header
+from .wt3000_core import ProtocolError, TmctlError, WTError, WTSession
 from .wt3000_itemspec import ItemSpec
 from .wt3000_numeric import (
+    FLOAT_NO_DATA,
     ItemTable,
     NumericValue,
     ValueStatus,
@@ -249,6 +252,99 @@ class SampleMark(Enum):
     MISSING = "MISSING"
 
 
+class MeasurementAborted(WTError):
+    """Die Fehlerstrategie hat den Lauf beendet.
+
+    Abzugrenzen von dem Fehler, der sie ausgeloest hat: der steht als
+    '__cause__' daran. Diese Klasse sagt nicht "die Leitung ist weg", sondern
+    "die vereinbarte Grenze ist ueberschritten" - die Zahl der Fehlversuche
+    steht in der Meldung, die bereits geschriebenen Daten liegen vollstaendig
+    in der Senke.
+    """
+
+
+#: Fehler, die als Kommunikationsstoerung gelten und deshalb unter eine
+#: 'ErrorPolicy' fallen.
+#
+# Bewusst nur diese zwei. TmctlError ist der Abriss auf der Leitung,
+# ProtocolError die verstuemmelte Antwort - beides Zustaende, die ein
+# naechster Versuch beheben kann. NICHT dabei sind ReadOnlyViolation,
+# ChangesNotAllowed und ConcurrentAccessError: sie melden einen Fehler im
+# aufrufenden Programm, und den durch Wiederholen zu uebergehen hiesse, ihn zu
+# verstecken. DeviceError ebenfalls nicht - das Geraet beanstandet dann ein
+# Kommando, was kein zweiter Versuch heilt.
+COMMUNICATION_ERRORS: tuple[type[WTError], ...] = (TmctlError, ProtocolError)
+
+
+@dataclass(frozen=True)
+class ErrorPolicy:
+    """Was bei einem Kommunikationsfehler waehrend der Messung geschehen soll.
+
+    OHNE Policy (der Vorgabewert 'None' an der Messschleife) verhaelt sich der
+    Treiber wie bisher: der Fehler verlaesst die Schleife und beendet den Lauf.
+    Das bleibt die Voreinstellung, weil das Gegenteil - Ausnahmen
+    stillschweigend in Datenzeilen zu verwandeln - kein Standardverhalten sein
+    darf, das man versehentlich bekommt.
+
+    MIT Policy wird ein fehlgeschlagener Zyklus zu einem Datensatz mit
+    'SampleMark.MISSING'. Er traegt NO_DATA in jeder Wertspalte und behaelt
+    damit die feste Spaltenzahl - die Luecke steht sichtbar in der Datei,
+    statt stillschweigend zu fehlen, und die strenge Spaltenregel der Senken
+    bleibt unangetastet.
+
+    Die vier Grenzen:
+
+      max_consecutive   So viele Fehler HINTEREINANDER beenden den Lauf.
+                        Ein einzelner Aussetzer ist ein Aussetzer; zehn in
+                        Folge sind ein abgerissenes Kabel.
+      max_total         Gesamtbudget ueber den ganzen Lauf. None = unbegrenzt.
+                        Fuer lange Laeufe sinnvoll: eine Leitung, die jede
+                        Minute einmal zuckt, liefert am Ende mehr Luecken als
+                        Messwerte, ohne je 'max_consecutive' zu reissen.
+      reconnect_after   Nach so vielen Fehlern in Folge wird die Verbindung
+                        neu aufgebaut. None = nie. Verlangt einen Transport
+                        mit 'reconnect()'.
+      max_reconnects    Obergrenze der Neuaufbauten im ganzen Lauf.
+
+    'pause_s' wartet vor dem naechsten Versuch. Voreinstellung 0: der
+    Messtakt wartet ohnehin bis zum naechsten Tick.
+    """
+
+    max_consecutive: int = 3
+    max_total: int | None = None
+    reconnect_after: int | None = None
+    max_reconnects: int = 3
+    pause_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.max_consecutive < 1:
+            raise WTError(
+                "max_consecutive muss mindestens 1 sein - eine Policy, die keinen "
+                "einzigen Fehler zulaesst, ist 'error_policy=None'."
+            )
+        if self.max_total is not None and self.max_total < 1:
+            raise WTError("max_total muss mindestens 1 sein oder None (unbegrenzt)")
+        if self.reconnect_after is not None:
+            if self.reconnect_after < 1:
+                raise WTError("reconnect_after muss mindestens 1 sein oder None (nie)")
+            if self.reconnect_after > self.max_consecutive:
+                raise WTError(
+                    f"reconnect_after={self.reconnect_after} liegt ueber "
+                    f"max_consecutive={self.max_consecutive} - der Lauf braeche ab, "
+                    "bevor je ein Neuaufbau versucht wuerde."
+                )
+
+    @classmethod
+    def unattended(cls) -> "ErrorPolicy":
+        """Voreinstellung fuer den unbeaufsichtigten Langzeitlauf.
+
+        Nach zwei Fehlern in Folge wird neu verbunden, nach fuenf abgebrochen;
+        hoechstens zehn Neuaufbauten. Bewusst kein 'max_total': wer ueber Tage
+        misst, will einen einzelnen Aussetzer je Stunde nicht als Abbruchgrund.
+        """
+        return cls(max_consecutive=5, reconnect_after=2, max_reconnects=10)
+
+
 @dataclass(frozen=True)
 class Sample:
     """Ein vollstaendiger Messzyklus.
@@ -299,6 +395,12 @@ class Sample:
         flags: list[str] = []
         if self.mark is not SampleMark.OK:
             flags.append(f"mark={self.mark.value}")
+        # Bei einem Ausfall traegt JEDE Spalte NO_DATA - das ist die Folge von
+        # 'mark=MISSING' und keine zusaetzliche Beobachtung. Sie einzeln
+        # aufzuzaehlen blaehte die Spalte bei einer Tabelle mit 100 Items auf
+        # ueber tausend Zeichen auf, ohne ein Byte Information zu tragen.
+        if self.mark is SampleMark.MISSING:
+            return flags
         flags.extend(
             f"{name}={value.status.value}"
             for name, value in zip(column_names, self.values)
@@ -409,6 +511,11 @@ class LoopStatistics:
     #: Bitgleiche Zyklen ohne Geraeteaktualisierung. Sie zaehlen als gelesen,
     #: aber nicht als neue Messpunkte.
     duplicates: int = 0
+    #: Ausgefallene Zyklen (SampleMark.MISSING). Sie stehen als Zeile in der
+    #: Ausgabe, tragen aber keine Messwerte.
+    missing: int = 0
+    #: Erfolgreiche Neuaufbauten der Verbindung waehrend des Laufs.
+    reconnects: int = 0
     #: ':RATE?' zu Beginn des Laufs; None, wenn nicht ermittelbar.
     update_rate_s: float | None = None
     cycle_times: list[float] = field(default_factory=list)
@@ -418,13 +525,23 @@ class LoopStatistics:
 
     @property
     def measured_samples(self) -> int:
-        """Datensaetze ohne die Dubletten - die Zahl echter Messpunkte."""
-        return self.samples - self.duplicates
+        """Datensaetze ohne Dubletten und Ausfaelle - die echten Messpunkte."""
+        return self.samples - self.duplicates - self.missing
 
     def log_summary(self, interval_s: float) -> None:
         """Zusammenfassung ausgeben."""
         _log.info("=" * 78)
         _log.info("Samples: %d, Overruns: %d", self.samples, self.overruns)
+        # Ausfaelle stehen VOR den Dubletten: eine Luecke ist der schwerere
+        # Befund, und wer nur die erste Zeile liest, soll sie sehen.
+        if self.missing:
+            _log.warning(
+                "Ausgefallene Zyklen: %d von %d Datensaetzen (%.1f %%)%s",
+                self.missing,
+                self.samples,
+                100.0 * self.missing / self.samples if self.samples else 0.0,
+                f", Verbindung {self.reconnects}x neu aufgebaut" if self.reconnects else "",
+            )
         # Dublettenzahl und Rate gehoeren zusammen: nur ihr Verhaeltnis zum
         # Messtakt zeigt, ob Wiederholungen erwartbar waren.
         if self.duplicates:
@@ -533,6 +650,8 @@ def run_measurement_loop(
     mark_duplicates: bool = True,
     # Ohne Hintergrundlauf gibt es kein externes Stoppsignal.
     stop_event: threading.Event | None = None,
+    # Ohne Fehlerstrategie beendet der erste Kommunikationsfehler den Lauf.
+    error_policy: "ErrorPolicy | None" = None,
 ) -> LoopStatistics:
     """Messschleife mit driftfreier Taktung.
 
@@ -612,6 +731,7 @@ def run_measurement_loop(
         log_every=log_every,
         mark_duplicates=mark_duplicates,
         stop_event=stop_event,
+        error_policy=error_policy,
     )
     try:
         for sample in strom:
@@ -669,6 +789,7 @@ def iter_samples(
     log_every: int,
     mark_duplicates: bool = True,
     stop_event: threading.Event | None = None,
+    error_policy: "ErrorPolicy | None" = None,
     # 'Generator' und nicht 'Iterator': nur der erste Typ sagt zu, dass
     # 'close()' vorhanden ist - und genau darauf verlassen sich
     # 'run_measurement_loop()' und 'Measurement._run()', um HOLD auch dann
@@ -680,6 +801,10 @@ def iter_samples(
     Der Generator garantiert dagegen die HOLD-Rueckstellung, auch bei
     vorzeitigem 'close()'. 'stats' wird waehrend des Laufs fortgeschrieben.
     Ein 'stop_event' unterbricht das Warten sofort statt erst nach dem Takt.
+
+    'error_policy' entscheidet ueber Kommunikationsfehler: ohne sie beendet
+    der erste Fehler den Lauf, mit ihr wird der Zyklus zu einem Datensatz mit
+    'SampleMark.MISSING' und die Reihe laeuft weiter. Siehe 'ErrorPolicy'.
     """
     # Nur Rohbytes entscheiden ueber eine Dublette; geparste NaN-Werte waeren
     # wegen NaN != NaN dafuer ungeeignet.
@@ -688,6 +813,7 @@ def iter_samples(
     started_monotonic = time.monotonic()
     next_tick = started_monotonic
     number = 0
+    fehler_in_folge = 0
 
     with NumericHold(session, enabled=use_hold) as hold:
         while True:
@@ -716,39 +842,77 @@ def iter_samples(
 
             cycle_start = time.monotonic()
 
-            # Snapshot einfrieren, dann lesen. Der Zeitstempel bezieht sich
-            # auf den Moment des HOLD ON, nicht auf den Antworteingang.
-            hold.refresh()
-            timestamp = datetime.now(timezone.utc).astimezone()
-            # Rohbytes sind die Grundlage der Dublettenpruefung.
-            payload, values = read_numeric_block(
-                session, expected_count=len(table.items)
-            )
-
             mark = SampleMark.OK
-            if mark_duplicates:
-                if previous_payload is not None and payload == previous_payload:
-                    mark = SampleMark.DUPLICATE
-                    stats.duplicates += 1
-                    # Gestaffelt wie die Overrun-Meldung: die erste
-                    # Dublette ist eine Nachricht, die tausendste ist
-                    # Laerm. Ueber Stunden bleibt das Protokoll lesbar,
-                    # ohne dass die Auffaelligkeit untergeht.
-                    if stats.duplicates in (1, 10, 100) or stats.duplicates % 500 == 0:
-                        _log.warning(
-                            "Zyklus %d ist bitgleich zum vorigen - das Geraet hat "
-                            "nicht aktualisiert. Dubletten bisher: %d",
-                            number + 1,
-                            stats.duplicates,
-                        )
-                previous_payload = payload
-
             condition: int | None = None
-            if record_condition:
-                # Bewusst OHNE condition_warnings(): eine Warnung je Zyklus
-                # ueber Stunden nuetzt niemandem. Der Zustand wird aufgezeichnet,
-                # nicht kommentiert.
-                condition = parse_condition(session.query(":STATus:CONDition?"))
+            abbruch: WTError | None = None
+
+            try:
+                # Snapshot einfrieren, dann lesen. Der Zeitstempel bezieht sich
+                # auf den Moment des HOLD ON, nicht auf den Antworteingang.
+                hold.refresh()
+                timestamp = datetime.now(timezone.utc).astimezone()
+                # Rohbytes sind die Grundlage der Dublettenpruefung.
+                payload, values = read_numeric_block(
+                    session, expected_count=len(table.items)
+                )
+
+                if mark_duplicates:
+                    if previous_payload is not None and payload == previous_payload:
+                        mark = SampleMark.DUPLICATE
+                        stats.duplicates += 1
+                        # Gestaffelt wie die Overrun-Meldung: die erste
+                        # Dublette ist eine Nachricht, die tausendste ist
+                        # Laerm. Ueber Stunden bleibt das Protokoll lesbar,
+                        # ohne dass die Auffaelligkeit untergeht.
+                        if stats.duplicates in (1, 10, 100) or stats.duplicates % 500 == 0:
+                            _log.warning(
+                                "Zyklus %d ist bitgleich zum vorigen - das Geraet hat "
+                                "nicht aktualisiert. Dubletten bisher: %d",
+                                number + 1,
+                                stats.duplicates,
+                            )
+                    previous_payload = payload
+
+                if record_condition:
+                    # Bewusst OHNE condition_warnings(): eine Warnung je Zyklus
+                    # ueber Stunden nuetzt niemandem. Der Zustand wird aufgezeichnet,
+                    # nicht kommentiert.
+                    condition = parse_condition(session.query(":STATus:CONDition?"))
+
+            except COMMUNICATION_ERRORS as error:
+                # Ohne Fehlerstrategie bleibt es beim bisherigen Verhalten:
+                # der Fehler beendet den Lauf.
+                if error_policy is None:
+                    raise
+
+                fehler_in_folge += 1
+                stats.missing += 1
+                mark = SampleMark.MISSING
+                timestamp = datetime.now(timezone.utc).astimezone()
+                # Feste Spaltenzahl auch fuer den Ausfall - siehe missing_values().
+                values = missing_values(len(table.items))
+                # Der vorige Rohblock bleibt der Bezug: ein ausgefallener
+                # Zyklus sagt nichts darueber, was das Geraet zuletzt lieferte.
+
+                # Kann eine MeasurementAborted ausloesen (Geraetezustand passt
+                # nach einem Neuaufbau nicht mehr). Dann darf keine weitere
+                # Zeile entstehen, auch diese nicht - deshalb faengt sie hier
+                # niemand ab.
+                abbruch = _handle_cycle_failure(
+                    error,
+                    session=session,
+                    table=table,
+                    policy=error_policy,
+                    stats=stats,
+                    consecutive=fehler_in_folge,
+                    number=number,
+                )
+                if error_policy.pause_s > 0:
+                    time.sleep(error_policy.pause_s)
+            else:
+                # Erst ein vollstaendig gelesener Zyklus beweist, dass die
+                # Verbindung wieder traegt.
+                fehler_in_folge = 0
 
             number += 1
             stats.samples = number
@@ -764,6 +928,12 @@ def iter_samples(
                 values=values,
                 mark=mark,
             )
+
+            # NACH dem yield: der Datensatz, der den Abbruch ausgeloest hat,
+            # ist damit geschrieben. Andernfalls fehlte in der Datei
+            # ausgerechnet die Zeile, die das Ende erklaert.
+            if abbruch is not None:
+                raise abbruch
 
             cycle_time = time.monotonic() - cycle_start
             stats.cycle_times.append(cycle_time)
@@ -792,6 +962,161 @@ def iter_samples(
                         stats.overruns,
                     )
                 next_tick = time.monotonic() + interval_s
+
+
+def missing_values(count: int) -> list[NumericValue]:
+    """Wertliste eines ausgefallenen Zyklus: 'count' mal NO_DATA.
+
+    Der Kern der Loesung fuer den Zielkonflikt aus S-08. Ein ausgefallener
+    Zyklus hat naturgemaess keine Messwerte, aber die Senken bestehen zu Recht
+    auf der festen Spaltenzahl - sonst verrutschen Werte gegen den
+    Spaltenkopf. Aufgefuellt wird mit genau dem Bitmuster, das auch das Geraet
+    fuer 'kein Wert' schickt (FLOAT_NO_DATA), damit die Zeile durch jede
+    vorhandene Auswertung laeuft: die CSV schreibt leere Zellen, JSONL 'null'.
+
+    Verwechslungsgefahr besteht nicht: 'mark=MISSING' steht in derselben
+    Zeile und unterscheidet den Ausfall von einem Zyklus, in dem das Geraet
+    selbst NO_DATA gemeldet hat.
+    """
+    return [NumericValue(math.nan, ValueStatus.NO_DATA, FLOAT_NO_DATA) for _ in range(count)]
+
+
+def verify_after_reconnect(session: WTSession, table: ItemTable) -> None:
+    """Nach einem Neuaufbau pruefen, ob weitergemessen werden DARF.
+
+    Ein 'reconnect()' stellt die Verbindung wieder her, nicht den
+    Geraetezustand. War das Geraet zwischendurch aus oder hat jemand am
+    Bedienfeld gearbeitet, stimmen Zahlenformat oder Item-Tabelle womoeglich
+    nicht mehr - und dann bedeutet jede weitere Zeile etwas anderes als ihr
+    Spaltenkopf behauptet. Solche Daten sind schlimmer als keine, weil sie
+    hinterher nicht mehr als falsch zu erkennen sind.
+
+    Geprueft wird deshalb beides, und eine Abweichung beendet den Lauf:
+
+      * ':NUMeric:FORMat' muss FLOat sein - sonst ist die Antwort auf
+        ':NUMeric:NORMal:VALue?' kein Binaerblock mehr.
+      * ':COMMunicate:HEADer' muss 0 sein - sonst tragen alle Antworten einen
+        Kopf, den die Parser hier nicht erwarten.
+      * Die Item-Tabelle muss Element fuer Element dieselbe sein. Die
+        Reihenfolge ist die ganze Zuordnung: der Messwertblock ist rein
+        positionsbezogen.
+    """
+    fmt = strip_response_header(session.query(":NUMeric:FORMat?"))
+    if not fmt.upper().startswith("FLO"):
+        raise MeasurementAborted(
+            f"Nach dem Neuaufbau steht ':NUMeric:FORMat' auf {fmt!r} statt FLOat. "
+            "Das Geraet war vermutlich stromlos. Weitermessen wuerde den "
+            "Messwertblock falsch auslesen."
+        )
+
+    header = strip_response_header(session.query(":COMMunicate:HEADer?"))
+    if header not in ("0", "OFF"):
+        raise MeasurementAborted(
+            f"Nach dem Neuaufbau steht ':COMMunicate:HEADer' auf {header!r} statt 0. "
+            "Alle Antworten traegen dann einen Kopf, den die Auswertung hier "
+            "nicht erwartet."
+        )
+
+    aktuell = ItemTable.read_from_device(session)
+    if [item.key for item in aktuell.items] != [item.key for item in table.items]:
+        raise MeasurementAborted(
+            f"Nach dem Neuaufbau hat die Item-Tabelle {len(aktuell.items)} Eintraege "
+            f"statt {len(table.items)} beziehungsweise eine andere Reihenfolge. Die "
+            "Spaltenzuordnung der bisherigen Datei gilt damit nicht mehr - der Lauf "
+            "wird beendet, statt Zeilen unter falschen Spalten fortzuschreiben."
+        )
+    _log.info("Nach dem Neuaufbau geprueft: Zahlenformat, Header und Item-Tabelle stimmen")
+
+
+def _handle_cycle_failure(
+    error: WTError,
+    *,
+    session: WTSession,
+    table: ItemTable,
+    policy: ErrorPolicy,
+    stats: LoopStatistics,
+    consecutive: int,
+    number: int,
+) -> WTError | None:
+    """Einen fehlgeschlagenen Zyklus abarbeiten; liefert einen Abbruchgrund oder None.
+
+    Ausgelagert, damit die Schleife lesbar bleibt: hier stehen Aufraeumen,
+    Wiederverbinden und die beiden Grenzen, dort der Messtakt.
+
+    Der Rueckgabewert ist bewusst KEINE Ausnahme, die gleich fliegt. Der
+    Aufrufer soll den MISSING-Datensatz erst noch ausgeben und dann abbrechen -
+    sonst fehlte ausgerechnet die Zeile, die den Abbruch erklaert.
+    """
+    _log.warning(
+        "Zyklus %d fehlgeschlagen (%d in Folge): %s", number + 1, consecutive, error
+    )
+
+    # Eine verspaetete Antwort wuerde sonst dem naechsten Query zugeordnet -
+    # der bekaeme dann die Werte des fehlgeschlagenen Zyklus.
+    try:
+        session.drain_after_failure()
+    except WTError as aufraeumfehler:
+        _log.warning("Nachraeumen nach dem Fehler misslang: %s", aufraeumfehler)
+
+    if policy.max_total is not None and stats.missing >= policy.max_total:
+        return _aborted(
+            f"{stats.missing} ausgefallene Zyklen erreichen das Gesamtbudget "
+            f"max_total={policy.max_total}. Der Lauf wird beendet; die bis hierher "
+            "geschriebenen Daten sind vollstaendig.",
+            error,
+        )
+
+    if (
+        policy.reconnect_after is not None
+        and consecutive >= policy.reconnect_after
+        and stats.reconnects < policy.max_reconnects
+    ):
+        if not session.can_reconnect:
+            _log.error(
+                "Wiederverbindung angefordert, aber der Transport kann es nicht - "
+                "reconnect_after bleibt wirkungslos"
+            )
+        else:
+            try:
+                session.reconnect()
+                verify_after_reconnect(session, table)
+            except MeasurementAborted:
+                # Der Geraetezustand passt nicht mehr: nicht weitermessen.
+                raise
+            except WTError as neuaufbau:
+                _log.error("Neuaufbau der Verbindung fehlgeschlagen: %s", neuaufbau)
+            else:
+                stats.reconnects += 1
+                _log.warning(
+                    "Verbindung neu aufgebaut (%d von hoechstens %d)",
+                    stats.reconnects,
+                    policy.max_reconnects,
+                )
+                # Der Neuaufbau ist der Erfolg, auf den die Zaehlung wartet.
+                return None
+
+    if consecutive >= policy.max_consecutive:
+        return _aborted(
+            f"{consecutive} Kommunikationsfehler in Folge erreichen "
+            f"max_consecutive={policy.max_consecutive}. Der Lauf wird beendet; die "
+            "bis hierher geschriebenen Daten sind vollstaendig.",
+            error,
+        )
+    return None
+
+
+def _aborted(meldung: str, ursache: WTError) -> MeasurementAborted:
+    """Abbruchgrund bauen und die ausloesende Ausnahme daranhaengen.
+
+    'MeasurementAborted' sagt "die vereinbarte Grenze ist erreicht" - warum
+    die Zyklen scheiterten, steht in der Ursache. Weil der Abbruch erst NACH
+    dem 'yield' ausgeloest wird, ist 'raise ... from ...' an der Wurfstelle
+    nicht mehr moeglich; '__cause__' wird deshalb hier gesetzt und ergibt
+    dieselbe verkettete Ausgabe im Traceback.
+    """
+    abbruch = MeasurementAborted(meldung)
+    abbruch.__cause__ = ursache
+    return abbruch
 
 
 def _preview(table: ItemTable, values: list[NumericValue], count: int = 3) -> str:
@@ -839,6 +1164,7 @@ class Measurement:
         metadata: Mapping[str, object] | None = None,
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
+        error_policy: "ErrorPolicy | None" = None,
     ) -> None:
         self._session = session
         self._table = table
@@ -852,6 +1178,7 @@ class Measurement:
         self._metadata = dict(metadata or {})
         self._check_update_rate = check_update_rate
         self._mark_duplicates = mark_duplicates
+        self._error_policy = error_policy
 
         self._stats = LoopStatistics()
         self._thread: threading.Thread | None = None
@@ -1032,6 +1359,7 @@ class Measurement:
                 log_every=self._log_every,
                 mark_duplicates=self._mark_duplicates,
                 stop_event=self._stop,
+                error_policy=self._error_policy,
             )
             try:
                 for sample in strom:

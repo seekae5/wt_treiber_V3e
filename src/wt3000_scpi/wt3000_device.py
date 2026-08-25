@@ -48,6 +48,7 @@ from .wt3000_itemspec import (
     verify_item_table,
 )
 from .wt3000_measure import (
+    ErrorPolicy,
     LoopStatistics,
     Measurement,
     NumericHold,
@@ -741,6 +742,7 @@ class MeasureControl:
         parameters: dict | None = None,
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
+        error_policy: "ErrorPolicy | None" = None,
     ) -> LoopStatistics:
         """Messschleife in eine beliebige Senke schreiben.
 
@@ -798,6 +800,7 @@ class MeasureControl:
             metadata=lauf_parameter,
             check_update_rate=check_update_rate,
             mark_duplicates=mark_duplicates,
+            error_policy=error_policy,
         )
 
     # -- Steuerbare Messung -------------------------------------------------
@@ -816,6 +819,7 @@ class MeasureControl:
         parameters: dict | None = None,
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
+        error_policy: "ErrorPolicy | None" = None,
     ) -> Measurement:
         """Eine Messung im Hintergrund starten und sofort zurueckkehren.
 
@@ -872,6 +876,7 @@ class MeasureControl:
             metadata=lauf_parameter,
             check_update_rate=check_update_rate,
             mark_duplicates=mark_duplicates,
+            error_policy=error_policy,
         ).start()
         self._active = messung
         return messung
@@ -887,6 +892,7 @@ class MeasureControl:
         log_every: int = 0,
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
+        error_policy: "ErrorPolicy | None" = None,
         stats: LoopStatistics | None = None,
         # 'Generator' und nicht 'Iterator', damit der Aufrufer 'close()'
         # aufrufen KANN - der Docstring unten verlangt es fuer den Abbruch
@@ -935,6 +941,7 @@ class MeasureControl:
             record_condition=record_condition,
             log_every=log_every,
             mark_duplicates=mark_duplicates,
+            error_policy=error_policy,
         )
 
     def record_csv(
@@ -952,6 +959,7 @@ class MeasureControl:
         parameters: dict | None = None,
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
+        error_policy: "ErrorPolicy | None" = None,
         # Optionale zweite Kopfzeile; nicht Default, weil sie das CSV-Format aendert.
         unit_row: bool = False,
     ) -> LoopStatistics:
@@ -973,6 +981,7 @@ class MeasureControl:
             parameters={"csv_file": csv_path.name, **(parameters or {})},
             check_update_rate=check_update_rate,
             mark_duplicates=mark_duplicates,
+            error_policy=error_policy,
         )
 
 

@@ -896,9 +896,9 @@ Spaltenüberschriften geschrieben werden.
 |---|---|
 | `Sample` | Ein Zyklus mit `timestamp`, `elapsed_s`, `number`, `condition`, `values` und `mark`. |
 | `ItemTable.unit_map()` | Spaltenname → Einheit. `""` heißt dimensionslos, `None` heißt „nicht belegt“. |
-| `Sample.status_flags(column_names)` | Liefert Auffälligkeiten wie `U2=OVERRANGE`. |
-| `SampleMark` | Zyklusstatus `OK` und `DUPLICATE`; `MISSING` ist vorbereitet (M3-4). |
-| `LoopStatistics` | Enthält `samples`, `overruns`, `duplicates`, `measured_samples`, `update_rate_s`, `cycle_times` und `status_counts`. |
+| `Sample.status_flags(column_names)` | Liefert Auffälligkeiten wie `U2=OVERRANGE`. Bei `mark=MISSING` nur diese eine Angabe — die Spalten einzeln aufzuzählen trüge keine Information. |
+| `SampleMark` | Zyklusstatus `OK`, `DUPLICATE` und `MISSING` (ausgefallener Zyklus, siehe `ErrorPolicy`). |
+| `LoopStatistics` | Enthält `samples`, `overruns`, `duplicates`, `missing`, `reconnects`, `measured_samples`, `update_rate_s`, `cycle_times` und `status_counts`. |
 | `LoopStatistics.log_summary(interval_s)` | Protokolliert Zykluszeiten und Statusverteilung. |
 | `SampleSink` | Protocol für eigene Ausgabesenken mit `open`, `write`, `close`. |
 
@@ -914,9 +914,57 @@ Die freien Funktionen dieser Datei sind:
 | `build_standard_profile()` | Baut das aktuelle Standardprofil für `V3A3,P1W2`. |
 | `write_metadata(path, session, table, parameters)` | Schreibt Geräte- und Laufmetadaten als JSON. |
 | `run_measurement_loop(...)` | Untere, blockierende Messschleife mit driftfreier Taktung. |
+| `iter_samples(...)` | Gemeinsamer Generatorrumpf hinter `record()`, `start()` und `stream()`. |
+| `missing_values(count)` | Wertliste eines ausgefallenen Zyklus: `count` mal `NO_DATA`. |
+| `verify_after_reconnect(session, table)` | Prüft Zahlenformat, Header und Item-Tabelle nach einem Neuaufbau. |
 
 Normalerweise werden sie über `wt.items.standard_profile()`, `record()` und
 `record_csv()` benutzt.
+
+#### Klasse `ErrorPolicy` — Kommunikationsfehler überleben
+
+**Ohne `ErrorPolicy` beendet der erste Kommunikationsfehler den Lauf.** Das ist die
+Voreinstellung und bleibt es: eine Bibliothek darf Ausnahmen nicht ungefragt in
+Datenzeilen verwandeln. Für einen Lauf mit bekanntem Ende ist das auch das richtige
+Verhalten — man merkt sofort, dass etwas nicht stimmt.
+
+Für **unbeaufsichtigte** Läufe wird eine Policy übergeben. Ein fehlgeschlagener Zyklus
+wird dann zu einem Datensatz mit `SampleMark.MISSING`, der `NO_DATA` in jeder
+Wertspalte trägt — die Lücke steht sichtbar in der Datei, statt stillschweigend zu
+fehlen, und die feste Spaltenzahl bleibt gewahrt.
+
+```python
+from wt3000_scpi import ErrorPolicy
+
+# Fertige Voreinstellung: nach 2 Fehlern in Folge neu verbinden,
+# nach 5 abbrechen, höchstens 10 Neuaufbauten.
+stats = wt.measure.record(
+    CsvSink(pfad), tabelle, interval_s=1.0,
+    error_policy=ErrorPolicy.unattended(),
+)
+print(stats.missing, "Ausfälle,", stats.reconnects, "Neuaufbauten")
+```
+
+| Feld | Bedeutung |
+|---|---|
+| `max_consecutive` | So viele Fehler **hintereinander** beenden den Lauf (Vorgabe 3). Ein einzelner Aussetzer ist ein Aussetzer; zehn in Folge sind ein abgerissenes Kabel. |
+| `max_total` | Gesamtbudget über den ganzen Lauf; `None` = unbegrenzt. Fängt die Leitung ab, die jede Minute einmal zuckt und nie `max_consecutive` reißt. |
+| `reconnect_after` | Nach so vielen Fehlern in Folge wird die Verbindung neu aufgebaut; `None` = nie. Verlangt einen Transport mit `reconnect()`. |
+| `max_reconnects` | Obergrenze der Neuaufbauten im ganzen Lauf (Vorgabe 3). |
+| `pause_s` | Wartezeit vor dem nächsten Versuch (Vorgabe 0 — der Messtakt wartet ohnehin). |
+
+Als Kommunikationsfehler gelten **nur** `TmctlError` und `ProtocolError`. Aufruffehler
+wie `ReadOnlyViolation` oder `ConcurrentAccessError` und ein `DeviceError` fallen nicht
+darunter: sie durch Wiederholen zu übergehen hieße, sie zu verstecken.
+
+Wird eine Grenze erreicht, endet der Lauf mit `MeasurementAborted`; der auslösende
+Fehler hängt als `__cause__` daran, und die auslösende Zeile steht noch in der Datei.
+
+**Nach einem Neuaufbau** prüft `verify_after_reconnect()` Zahlenformat, Header und
+Item-Tabelle. Weicht eines ab — etwa weil das Gerät zwischendurch stromlos war —,
+endet der Lauf. Weiterzumessen hieße, Zeilen unter einem Spaltenkopf fortzuschreiben,
+der nicht mehr gilt; solche Daten sind schlimmer als keine, weil sie hinterher nicht
+mehr als falsch zu erkennen sind.
 
 ## 12. Eigene Item-Tabelle und Messreihe kombiniert verwenden
 

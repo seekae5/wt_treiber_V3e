@@ -26,6 +26,7 @@ from .wt3000_transport import (
     MAX_PROGRAM_MESSAGE_BYTES,
     TM_CTL_ETHER,
     ProtocolError,
+    ReconnectableTransport,
     TmctlError,
     TmctlTransport,
     Transport,
@@ -42,6 +43,7 @@ __all__ = [
     "MAX_PROGRAM_MESSAGE_BYTES",
     "TM_CTL_ETHER",
     "ProtocolError",
+    "ReconnectableTransport",
     "TmctlError",
     "TmctlTransport",
     "Transport",
@@ -387,6 +389,40 @@ class WTSession:
         return raw.decode("ascii", errors="replace").strip("\r\n\0 ")
 
     # -- Fehlerqueue --------------------------------------------------------
+
+    # -- Wiederverbindung ---------------------------------------------------
+
+    @property
+    def can_reconnect(self) -> bool:
+        """Kann der Transport eine abgerissene Verbindung neu aufbauen?"""
+        return isinstance(self._transport, ReconnectableTransport)
+
+    def reconnect(self) -> None:
+        """Verbindung neu aufbauen und die Fernsteuerung wiederherstellen.
+
+        Nur die VERBINDUNG wird wiederhergestellt, nicht der Geraetezustand:
+        Protokollknoten, HOLD und Item-Tabelle koennen nach einem Neuaufbau
+        anders stehen - etwa weil das Geraet zwischendurch aus war. Wer
+        danach weitermisst, prueft sie nach; 'verify_after_reconnect()' in
+        wt3000_measure ist genau dafuer da.
+
+        REMOTE ist der eine Zustand, der hier mitkommt: die Sitzung hat ihn
+        selbst eingeschaltet, weiss es als Einzige und wuerde sonst
+        stillschweigend ohne Fernsteuerung weiterlaufen.
+        """
+        with self._exclusive("reconnect()"):
+            transport = self._transport
+            if not isinstance(transport, ReconnectableTransport):
+                raise WTError(
+                    f"{type(transport).__name__} kann keine Verbindung neu aufbauen. "
+                    "Fuer eine Wiederverbindung muss der Transport 'reconnect()' "
+                    "anbieten (siehe ReconnectableTransport)."
+                )
+            war_remote = self._remote_active
+            self._remote_active = False
+            transport.reconnect()
+            if war_remote:
+                self.enable_remote()
 
     def drain_after_failure(self) -> None:
         """Nach einem fehlgeschlagenen Query eine verspaetete Antwort abraeumen.

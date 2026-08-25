@@ -67,11 +67,14 @@ Fassade bzw. CLI. Gehört zu M2-5/M5-2.
 Nebenläufigkeit und Sitzungsbesitz sind umgesetzt. Offen bleibt nur, ob
 `use_hold=False` „HOLD nicht anfassen“ oder „HOLD muss aus sein“ bedeutet.
 
-### S-08 — Fehlende Zyklen passen nicht zur strengen Spaltenzahl
+### S-08 — Fehlende Zyklen und strenge Spaltenzahl — **erledigt 25.08.2026**
 
-`SampleMark.MISSING` existiert, aber `require_matching_columns()` lehnt einen leeren
-Zyklus ab. Bevorzugte Lösung für M3-4: mit `NO_DATA` auf die feste Spaltenzahl
-auffüllen.
+Gelöst wie vorgesehen: `missing_values()` füllt einen ausgefallenen Zyklus mit
+`NO_DATA` auf die feste Spaltenzahl auf. `require_matching_columns()` bleibt damit
+unangetastet, und die Lücke steht als Zeile mit `mark=MISSING` in der Datei, statt
+stillschweigend zu fehlen. Die Einzelspalten werden bei `MISSING` **nicht** in
+`status_flags` aufgezählt — bei 100 Items wäre das eine Statusspalte von über
+tausend Zeichen ohne zusätzliche Information.
 
 ### S-09 — Auslieferung ist unvollständig
 
@@ -89,7 +92,7 @@ ersetzen kann. Die Dublettenerkennung bleibt als Absicherung bestehen.
 
 1. H-01 bis H-07 in einem reproduzierbaren Gerätetermin.
 2. S-02, damit neue Konfigurationsgruppen keine weiteren Parservarianten erzeugen.
-3. S-03/S-05 und danach M3-4: Kommunikationsabbrüche sind die wichtigste Lücke für
-   unbeaufsichtigte Langzeitmessungen.
-4. M4-3/M4-4 für dauerhaft interpretierbare und rotierende Messdateien.
+3. M4-3/M4-4 für dauerhaft interpretierbare und rotierende Messdateien — seit M3-4
+   erledigt ist, die letzte Lücke des unbeaufsichtigten Langzeitlaufs.
+4. S-03/S-05 für eine durchgängige Fehlersemantik an den Paketgrenzen.
 5. S-09/M5 für auslieferbares Paket, CLI und CI.

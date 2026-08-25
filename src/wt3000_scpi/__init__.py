@@ -11,6 +11,7 @@ from __future__ import annotations
 # Ablauffunktionen bleiben in ihren Modulen und werden nicht gesammelt exportiert.
 from .wt3000_core import (
     ConcurrentAccessError,
+    ReconnectableTransport,
     DeviceError,
     ProtocolError,
     ReadOnlyViolation,
@@ -61,8 +62,10 @@ from .wt3000_input import (
 )
 # Messdatensatz, Messsteuerung und Profilfunktionen.
 from .wt3000_measure import (
+    ErrorPolicy,
     LoopStatistics,
     Measurement,
+    MeasurementAborted,
     Sample,
     SampleMark,
     SampleSink,
@@ -97,6 +100,7 @@ __all__ = [
     "ProtocolError",
     "DeviceError",
     "ReadOnlyViolation",
+    "ReconnectableTransport",
     "ConcurrentAccessError",
     "ConfigLocked",
     "ChangesNotAllowed",
@@ -140,6 +144,9 @@ __all__ = [
     # Steuerbare Messung
     "Measurement",
     "LoopStatistics",
+    # Fehlerstrategie bei Kommunikationsabbruechen
+    "ErrorPolicy",
+    "MeasurementAborted",
     # Datensatz
     "Sample",
     "SampleMark",

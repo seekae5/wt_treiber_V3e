@@ -350,6 +350,24 @@ class Transport(Protocol):
     def close(self) -> None: ...
 
 
+@runtime_checkable
+class ReconnectableTransport(Protocol):
+    """Transport, der eine abgerissene Verbindung neu aufbauen kann.
+
+    Bewusst NICHT Teil von 'Transport': ein Transport bleibt mit fuenf
+    Methoden vollstaendig, und ein selbstgeschriebener soll nicht ungueltig
+    werden, nur weil die Messschleife eine Wiederverbindung anbietet. Die
+    Fehlerstrategie fragt ueber isinstance() nach dieser Faehigkeit und
+    verzichtet auf die Wiederverbindung, wenn sie fehlt.
+
+    Zusage: nach erfolgreichem 'reconnect()' ist der Transport benutzbar wie
+    nach dem Verbindungsaufbau. Geraetezustand wird dabei NICHT
+    wiederhergestellt - REMOTE, HOLD und Protokollknoten koennen weg sein.
+    """
+
+    def reconnect(self) -> None: ...
+
+
 # ---------------------------------------------------------------------------
 # TMCTL-Transport
 # ---------------------------------------------------------------------------
@@ -524,6 +542,23 @@ class TmctlTransport:
         else:
             self._log.info("Verbindung geschlossen")
 
+    def reconnect(self) -> None:
+        """Verbindung schliessen und neu aufbauen (ReconnectableTransport).
+
+        Das alte Handle wird auch dann verworfen, wenn 'TmcFinish' meckert:
+        nach einem Abriss ist es ohnehin wertlos, und ein Fehler beim
+        Schliessen darf den Neuaufbau nicht verhindern. Die DLL ist bereits
+        geladen und die Prototypen sind erklaert - neu aufgebaut wird nur die
+        Sitzung zum Geraet.
+
+        Der Geraetezustand wird NICHT wiederhergestellt. Wer nach einem
+        Neuaufbau weitermisst, muss Item-Tabelle und Protokollzustand
+        nachpruefen; 'verify_after_reconnect()' in wt3000_measure tut das.
+        """
+        self.close()
+        self._initialize()
+        self._log.warning("Verbindung neu aufgebaut, Device-ID %d", self._device_id.value)
+
     # -- Context Manager ----------------------------------------------------
 
     def __enter__(self) -> "TmctlTransport":
@@ -620,6 +655,9 @@ class FakeTransport:
         self.timeouts_ms: list[int] = []
         self.closed = False
         self.reads = 0
+        #: Zahl der Neuaufbauten - der Zaehler, an dem ein Test die
+        #: Wiederverbindung nachweist.
+        self.reconnects = 0
         self.chunk_size = chunk_size
         self.error_queue: list[str] = list(error_queue or ())
         self.fail_commands: set[str] = {self._key(c) for c in fail_commands}
@@ -728,6 +766,18 @@ class FakeTransport:
     def close(self) -> None:
         """Verbindung schliessen. Mehrfachaufruf ist unschaedlich."""
         self.closed = True
+
+    def reconnect(self) -> None:
+        """Neuaufbau nachstellen (ReconnectableTransport).
+
+        Verwirft nicht abgeholte Haeppchen - genau das ist der Sinn eines
+        Neuaufbaus: was auf der alten Verbindung unterwegs war, ist weg.
+        'fail_commands' bleibt unveraendert; ein Test, der eine ERHOLUNG
+        nachstellen will, leert die Menge selbst.
+        """
+        self._pending.clear()
+        self.closed = False
+        self.reconnects += 1
 
     # -- Context Manager ----------------------------------------------------
 
