@@ -16,7 +16,7 @@ Diese Datei beschreibt Ziele und Abnahmekriterien. Technische Bedienung steht im
 | Fundament | Transport-Protokoll, Fassade, Konfigurationsauflösung, Geräte-Fake | einheitliche Timeout- und Fehlerstrategie |
 | Gerätekonfiguration | Input, Bereiche, Items, Integration, Berechnung, Harmonics, Backups | Hardwarebelege und Parserkonsolidierung |
 | Messung | blockierend, Generator und steuerbarer Hintergrundlauf | Wiederverbindung und fehlende Zyklen |
-| Export | CSV, JSONL, Callback, MultiSink, Status und Einheiten | Rotation und feste Metadatenbindung |
+| Export | CSV, JSONL, Callback, MultiSink, Status, Einheiten, Rotation und geprüftes Fortsetzen | feste Metadatenbindung (M4-3) |
 | Auslieferung | installierbares Paket, README, Tests, Ruff, Mypy | CLI, CI, Lizenz und vollständige Metadaten |
 
 ## Meilensteine
@@ -105,11 +105,30 @@ vorhanden.
 | M4-1 | formatunabhängiger Datensatz `Sample` mit Status | erledigt 20.08.2026 |
 | M4-2 | `SampleSink`, CSV, JSONL, Callback und MultiSink | erledigt 20.08.2026 |
 | M4-3 | Einheiten und verbindliche Metadaten | Einheiten erledigt; feste Bindung an Geräte-/Messkontext offen |
-| M4-4 | Rotation und sicheres Fortsetzen | offen |
+| M4-4 | Rotation und sicheres Fortsetzen | erledigt 25.08.2026 |
 
 M4-3 ist fertig, wenn eine Messdatei ohne Zusatzwissen eindeutig interpretierbar ist.
-M4-4 benötigt Rotation nach Zeit, Größe oder Zeilenanzahl sowie eine Prüfung von
-Format und Spaltenkopf vor dem Fortsetzen.
+
+M4-4 ist über `RotatingSink` und `if_exists` umgesetzt:
+
+- [x] **Rotation nach Zeilenzahl, Größe oder Zeit** (`RotationPolicy`). `RotatingSink`
+  ist eine *umhüllende* Senke und keine Option an `CsvSink`/`JsonlSink` — Rotation ist
+  eine Frage des Lebenszyklus und damit formatunabhängig. Sie gilt für beide Formate
+  und für jedes spätere, ohne dass eines davon sie kennt (dasselbe Muster wie
+  `MultiSink`).
+- [x] **Prüfung von Format und Spaltenkopf vor dem Fortsetzen** (`if_exists="append"`).
+  Ein abweichender Kopf, ein anderes Trennzeichen oder eine fremde Datei enden in
+  `AppendMismatch`, statt eine Datei zu erzeugen, in der ab einer bestimmten Zeile
+  etwas anderes steht als im Kopf.
+- [x] **Kollisionsschutz** (`if_exists="error"` / `"unique"`). Die Voreinstellung bleibt
+  `"overwrite"`, damit kein bestehendes Skript stillschweigend anders läuft — sie
+  **protokolliert** den Verlust jetzt aber, und genau das war der frühere Befund
+  („überschreibt wortlos").
+
+Nummerierung und Laufzeit zählen über alle Abschnitte durch: sie gehören zur Messreihe,
+nicht zur Datei. Der Abschnittswechsel geschieht **träge** — erst beim nächsten
+Datensatz —, sonst bliebe am Ende eines Laufs, der genau auf einer Grenze endet, eine
+Datei mit nichts als einem Spaltenkopf stehen.
 
 ### M5 — Auslieferbarkeit
 

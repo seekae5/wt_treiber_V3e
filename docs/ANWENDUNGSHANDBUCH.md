@@ -857,10 +857,11 @@ Das Ändern von Eingangsparametern oder Item-Tabellen erfordert zusätzlich
 
 | Klasse | Konstruktor und Zweck |
 |---|---|
-| `CsvSink(path, delimiter=",")` | Schreibt Kopf und Messdatensätze in CSV. |
-| `JsonlSink(path)` | Schreibt Metadaten und Datensätze zeilenweise als JSON. |
+| `CsvSink(path, delimiter=",", unit_row=False, if_exists="overwrite")` | Schreibt Kopf und Messdatensätze in CSV. |
+| `JsonlSink(path, if_exists="overwrite")` | Schreibt Metadaten und Datensätze zeilenweise als JSON. |
 | `CallbackSink(callback)` | Übergibt jeden `Sample` an eine Python-Funktion. |
 | `MultiSink(*sinks)` | Verteilt jeden Datensatz an mehrere Senken. |
+| `RotatingSink(factory, path, policy)` | Verteilt eine Messreihe auf mehrere Dateien. |
 
 Jede Senke besitzt `open(columns, metadata=None)`, `write(sample)` und `close()`.
 Bei Verwendung über `record()` werden diese Methoden automatisch und fehlersicher
@@ -887,6 +888,77 @@ with WT3000.connect() as wt:
 `require_matching_columns(sample, columns, ziel)` ist der gemeinsame Prüfer für eigene
 Senken. Er verhindert, dass Messwerte bei abweichender Anzahl unter falsche
 Spaltenüberschriften geschrieben werden.
+
+#### Vorhandene Datei: `if_exists`
+
+Beide Dateisenken entscheiden über eine bereits vorhandene Zieldatei:
+
+| Wert | Wirkung |
+|---|---|
+| `"overwrite"` | Voreinstellung. Die Datei wird neu angelegt — der Verlust wird jetzt **protokolliert**, statt wortlos zu geschehen. |
+| `"error"` | Abbruch, bevor etwas geöffnet wird. Die vorhandene Datei bleibt unangetastet. |
+| `"append"` | Weiterschreiben, **nachdem** Format und Spaltenkopf geprüft sind. |
+| `"unique"` | Einen freien Namen daneben wählen (`messung_0001.csv`). |
+
+Eine leere Datei gilt dabei nicht als vorhanden — sie ist kein Messergebnis.
+Der tatsächlich beschriebene Pfad steht nach `open()` in `sink.path`; bei `"unique"`
+weicht er vom gewünschten ab.
+
+**Fortsetzen wird verweigert**, wenn der vorhandene Spaltenkopf, das Trennzeichen oder
+die Spaltenliste einer JSONL nicht zum neuen Lauf passen — mit `AppendMismatch` und
+einer Meldung, die die erste abweichende Spalte nennt. Ohne diese Prüfung entstünde
+eine Datei, in der ab einer bestimmten Zeile andere Größen stehen als im Kopf, und das
+ist hinterher nicht mehr zu erkennen.
+
+Beim Fortsetzen beginnen `sample` und `elapsed_s` wieder bei 1 bzw. 0 — zwei Läufe in
+einer Datei. Zum Sortieren über beide hinweg dient `timestamp_iso`; darauf weist ein
+Protokolleintrag hin.
+
+#### Rotation: `RotatingSink` und `RotationPolicy`
+
+Für Läufe über Stunden oder Tage. `RotatingSink` ist eine *umhüllende* Senke, keine
+Option an `CsvSink` — Rotation ist eine Frage des Lebenszyklus und gilt deshalb für
+jedes Format:
+
+```python
+from wt3000_scpi import CsvSink, RotatingSink, RotationPolicy
+
+sink = RotatingSink(CsvSink, Path("messung.csv"), RotationPolicy(max_rows=10_000))
+wt.measure.record(sink, table, interval_s=1.0)
+# schreibt messung_0001.csv, messung_0002.csv, ...
+print(sink.segments)          # die Pfade aller Abschnitte
+```
+
+Der erste Parameter ist eine Funktion `Pfad -> Senke`; `CsvSink` und `JsonlSink`
+erfüllen das bereits. Wer weitere Optionen braucht, übergibt ein Lambda:
+`lambda p: CsvSink(p, unit_row=True)`.
+
+| Grenze | Bedeutung |
+|---|---|
+| `max_rows` | Datensätze je Abschnitt. Die verlässlichste Grenze — hängt weder an der Zeilenlänge noch an der Uhr. |
+| `max_bytes` | Ungefähre Größe je Abschnitt. Geprüft nach dem Schreiben, ein Abschnitt darf um bis zu eine Zeile überschreiten. |
+| `max_seconds` | Laufzeit je Abschnitt auf monotoner Uhr — etwa eine Datei je Stunde. |
+
+Mindestens eine Grenze muss gesetzt sein; sind es mehrere, gilt die zuerst erreichte.
+
+Zwei Eigenschaften, die beim Zusammenführen der Abschnitte zählen:
+
+* **`sample` und `elapsed_s` zählen durch.** Sie gehören zur Messreihe, nicht zur
+  Datei — eine je Abschnitt neu beginnende Nummerierung machte die Teile
+  unzusammensetzbar.
+* **Der Wechsel geschieht träge**, erst beim nächsten Datensatz. Ein Lauf, der genau
+  auf einer Grenze endet, hinterlässt deshalb keine letzte Datei mit nichts als einem
+  Spaltenkopf.
+
+Für den CSV-Normalfall geht beides direkt über `record_csv()`:
+
+```python
+wt.measure.record_csv(
+    Path("messung.csv"), table, interval_s=1.0,
+    if_exists="unique", rotation=RotationPolicy(max_seconds=3600),
+    error_policy=ErrorPolicy.unattended(),
+)
+```
 
 ### Datei `wt3000_measure.py`
 

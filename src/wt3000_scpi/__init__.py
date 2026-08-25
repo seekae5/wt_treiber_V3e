@@ -76,7 +76,17 @@ from .wt3000_measure import (
 from .wt3000_numeric import NumericValue, ValueStatus
 from .wt3000_rangeio import ChangesNotAllowed, Quantity
 # Ausgabeformate und ihr gemeinsamer Vertrag SampleSink.
-from .wt3000_sinks import CallbackSink, CsvSink, JsonlSink, MultiSink, SinkNotOpen
+from .wt3000_sinks import (
+    AppendMismatch,
+    CallbackSink,
+    CsvSink,
+    JsonlSink,
+    MultiSink,
+    RotatingSink,
+    RotationPolicy,
+    SinkNotOpen,
+    unique_path,
+)
 from .wt3000_transport import FakeTransport
 
 __all__ = [
@@ -157,6 +167,11 @@ __all__ = [
     "CallbackSink",
     "MultiSink",
     "SinkNotOpen",
+    # Rotation und sicheres Fortsetzen (M4-4)
+    "RotatingSink",
+    "RotationPolicy",
+    "AppendMismatch",
+    "unique_path",
 ]
 
 __version__ = "0.3.0"

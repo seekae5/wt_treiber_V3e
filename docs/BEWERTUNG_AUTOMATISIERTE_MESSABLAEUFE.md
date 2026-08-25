@@ -9,12 +9,14 @@
 |---|---|---|
 | Skriptlauf mit bekanntem Ende | **geeignet** | ohne `ErrorPolicy` beendet ein Kommunikationsfehler weiterhin den Lauf — das ist die Voreinstellung und Absicht |
 | Überwachter Automat | **geeignet mit Vorbehalt** | während einer Hintergrundmessung gehört die WT3000-Sitzung exklusiv dem Mess-Thread |
-| Unbeaufsichtigter Langzeitlauf | **geeignet mit Vorbehalt** | mit `ErrorPolicy.unattended()`; es fehlt noch die Dateirotation für sehr lange Läufe |
+| Unbeaufsichtigter Langzeitlauf | **geeignet** | mit `ErrorPolicy.unattended()` und `RotationPolicy`; offen bleibt allein die Geräteabnahme (M0) |
 
 Die früher größten Lücken — Einheiten, getestete Bereichsrückstellung,
-Protokollzustand, Sitzungsbesitz, eine steuerbare Messung und die Fehlerstrategie bei
-Kommunikationsabbrüchen — sind geschlossen. Entscheidend offen sind heute nur noch die
-Geräteabnahme (M0) und die Dateirotation für Läufe über viele Stunden.
+Protokollzustand, Sitzungsbesitz, eine steuerbare Messung, die Fehlerstrategie bei
+Kommunikationsabbrüchen und der Langzeit-Dateibetrieb — sind geschlossen. **Alle drei
+Betriebsarten sind damit softwareseitig abgedeckt.** Entscheidend offen ist nur noch
+die Abnahme am realen Gerät (M0): mehrere schreibende Pfade und das Verhalten bei
+einem echten Verbindungsabriss sind gerätefrei geprüft, aber nicht belegt.
 
 ## Funktionsstand
 
@@ -25,7 +27,7 @@ Geräteabnahme (M0) und die Dateirotation für Läufe über viele Stunden.
 | Geräterate | Lesen, Setzen und Plausibilisierung gegen Python-Takt | ereignisgesteuertes Warten |
 | Item-Tabelle | Profile, Apply/Restore, Tail-Sicherung | Spezialprofile nur bei Bedarf |
 | Messung | `record()`, `start()`/`stop()`/`wait()` und `stream()` mit gemeinsamem Kern; `ErrorPolicy` mit `MISSING`-Zyklen, Fehlergrenzen und geprüfter Wiederverbindung | ereignisgesteuertes Warten auf einen neuen Datensatz (hängt an M0-5) |
-| Datenexport | CSV, JSONL, Callback, MultiSink; Status, Rate, bekannte Einheiten und sichtbare Lücken (`mark=MISSING` bei voller Spaltenzahl) | Rotation und feste Metadatenbindung |
+| Datenexport | CSV, JSONL, Callback, MultiSink; Status, Rate, bekannte Einheiten, sichtbare Lücken (`mark=MISSING` bei voller Spaltenzahl), Rotation nach Zeilen/Größe/Zeit und geprüftes Fortsetzen | feste Bindung zwischen Messdatei und Metadaten |
 | Integration | Konfiguration, Start/Stop/Reset, Profil und Zustandsüberwachung | kompletter Lauf am realen Gerät |
 | Rechenfunktionen | Averaging, Frequenzquelle, Effizienz, SQ-Formel, Synchronisation | weitere Spezialgruppen nur bei Bedarf |
 | Harmonics | Konfiguration und Messprofil mit Optionsprüfung | Geräteabnahme; Einheiten einzelner Faktoren |
@@ -37,7 +39,7 @@ Geräteabnahme (M0) und die Dateirotation für Läufe über viele Stunden.
 |---|---|---|
 | 1 | Hardwarefragen gebündelt prüfen (M0) | entfernt verbliebene Syntax- und Firmwareannahmen; einziger Punkt mit Vorlauf |
 | 2 | Parser und Scope-Regeln zusammenführen (M2-5) | verhindert widersprüchliche Antworten und weitere Duplikate |
-| 3 | Rotation und Metadatenbindung (M4-3/M4-4) | macht lange Messungen dauerhaft auswertbar |
+| 3 | Feste Metadatenbindung (M4-3) | macht eine Messdatei ohne Zusatzwissen eindeutig |
 | 4 | Allgemeine Fehlersemantik (M1-5/S-03, S-05) | `WTError` an allen Paketgrenzen statt vereinzelter `KeyError` |
 | 5 | CLI, CI und Paketmetadaten (M5) | macht die Bibliothek reproduzierbar auslieferbar |
 

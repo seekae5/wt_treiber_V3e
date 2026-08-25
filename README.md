@@ -16,9 +16,9 @@ Python ≥ 3.10 · keine Laufzeitabhängigkeiten · Version 0.3.0 · **experimen
 | **Messung aufzeichnen** — blockierende Schleife mit HOLD-Anker, Zeitstempel, CSV; Takt gegen `:RATE` geprüft, Wiederholungen als `DUPLICATE` gekennzeichnet | vollständig |
 | **Gerätekonfiguration jenseits von `:INPut`** — Averaging, Integration, Oberschwingungen | vorhanden, Geräteabnahme offen; Setup-Speicher fehlt |
 | **Steuerbare Messung** — `start()`/`stop()`/`wait()`/`is_running`, Generator `stream()`, exklusiver Sitzungsbesitz | vollständig |
-| **Unbeaufsichtigter Betrieb** — `ErrorPolicy` mit `MISSING`-Zyklen, Fehlergrenzen und geprüfter Wiederverbindung | vollständig; Dateirotation fehlt |
+| **Unbeaufsichtigter Betrieb** — `ErrorPolicy` mit `MISSING`-Zyklen, Fehlergrenzen und geprüfter Wiederverbindung; Rotation nach Zeilen/Größe/Zeit, geprüftes Fortsetzen | vollständig |
 | **Ereignisgesteuerte Taktung am Gerät** | fehlt (hängt an einem Gerätetermin) |
-| **Austauschbarer Export** — CSV, JSON Lines, Callback, Mehrfachausgabe; Einheiten an den Daten | weitgehend |
+| **Austauschbarer Export** — CSV, JSON Lines, Callback, Mehrfachausgabe, Rotation; Einheiten an den Daten | weitgehend (feste Metadatenbindung offen) |
 
 Was noch fehlt und in welcher Reihenfolge es entsteht, steht in [ROADMAP.md](docs/ROADMAP.md).
 
@@ -69,7 +69,7 @@ konfigurierten Werkzeuge laufen ohne Argumente und sind **heute vollständig gr�
 ```bash
 ruff check .    # Stil und ungenutzte Namen (E/F/W, Zeilenlänge 100)
 mypy            # Typprüfung über src/, Zielplattform Windows
-pytest          # 789 Fälle, wenige Sekunden
+pytest          # 821 Fälle, wenige Sekunden
 ```
 
 Die Einstellungen stehen in [pyproject.toml](pyproject.toml), jeweils mit Begründung —
@@ -297,7 +297,7 @@ Für PyCharm liegen fertige Startkonfigurationen unter [.run/](.run).
 ## Tests
 
 ```bash
-pytest                                  # 789 Tests, wenige Sekunden
+pytest                                  # 821 Tests, wenige Sekunden
 pytest tests/test_device_facade.py -v   # nur die Fassade
 ```
 

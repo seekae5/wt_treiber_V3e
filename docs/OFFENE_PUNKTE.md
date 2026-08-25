@@ -92,7 +92,7 @@ ersetzen kann. Die Dublettenerkennung bleibt als Absicherung bestehen.
 
 1. H-01 bis H-07 in einem reproduzierbaren Gerätetermin.
 2. S-02, damit neue Konfigurationsgruppen keine weiteren Parservarianten erzeugen.
-3. M4-3/M4-4 für dauerhaft interpretierbare und rotierende Messdateien — seit M3-4
-   erledigt ist, die letzte Lücke des unbeaufsichtigten Langzeitlaufs.
+3. M4-3 für eine feste Bindung zwischen Messdatei und Metadaten — nach M3-4 und M4-4
+   die letzte inhaltliche Lücke des unbeaufsichtigten Langzeitlaufs.
 4. S-03/S-05 für eine durchgängige Fehlersemantik an den Paketgrenzen.
 5. S-09/M5 für auslieferbares Paket, CLI und CI.
