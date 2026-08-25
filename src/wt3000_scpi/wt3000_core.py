@@ -14,6 +14,11 @@
 from __future__ import annotations
 
 import logging
+# NEU (ROADMAP M3-1): die Sitzung bekommt einen Besitzer. Beides gehoert
+# zusammen - das Lock schuetzt den Draht, der Besitzer schuetzt den Takt.
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 # Importrichtung nach unten: Layer 1 zieht sich Layer 0 herein. 'Transport' ist
 # der Vertrag, den WTSession voraussetzt; die uebrigen Namen werden nur
@@ -50,6 +55,7 @@ __all__ = [
     "config_file_in_use",
     # hier beheimatet (Layer 1)
     "MAX_BLOCK_READS",
+    "ConcurrentAccessError",
     "DeviceError",
     "ReadOnlyViolation",
     "WTSession",
@@ -78,6 +84,23 @@ class ReadOnlyViolation(WTError):
     """In einer Nur-Lesen-Session wurde ein schreibendes Kommando versucht."""
 
 
+class ConcurrentAccessError(WTError):
+    """Fremdzugriff auf eine Sitzung, die gerade einem anderen Thread gehoert.
+
+    NEU (ROADMAP M3-1, Maßnahme A2). Der Fall, den diese Klasse sichtbar
+    macht, ist der teuerste im ganzen Paket: write() und query() sind ein
+    Schreib-Lese-Paar auf EINER Verbindung. Laufen zwei davon nebenlaeufig,
+    bekommt der eine Aufrufer die Antwort des anderen - und zwar
+    stillschweigend, weil beide Antworten fuer sich plausibel aussehen. Eine
+    Messreihe, die so entstanden ist, laesst sich hinterher nicht mehr von
+    einer richtigen unterscheiden.
+
+    Deshalb ist die Meldung hier laut und nicht bloss ein Log-Eintrag: eine
+    laufende Messung besitzt ihre Sitzung, und wer sie von aussen anspricht,
+    soll das in dem Moment erfahren, in dem er es tut.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Layer 1 - Session / Plumbing
 # ---------------------------------------------------------------------------
@@ -90,29 +113,40 @@ class WTSession:
     laeuft dieselbe Sitzung geraetefrei auf 'FakeTransport' - und spaeter auf
     einem Socket- oder VISA-Transport, ohne dass hier eine Zeile faellt.
 
-    OFFEN (ROADMAP M3-1) - VOR der Umsetzung zu entscheiden, nicht waehrend:
-    Diese Klasse ist NICHT threadsicher, und im ganzen Paket gibt es kein
-    einziges Lock. write() und query() sind ein Schreib-Lese-Paar auf EINER
-    Verbindung; laufen zwei davon nebenlaeufig, bekommt der eine Aufrufer die
-    Antwort des anderen - und zwar stillschweigend, weil beide Antworten fuer
-    sich plausibel aussehen. Sobald M3-1 die Messschleife in einen
-    Hintergrund-Thread legt, ist genau das der Normalfall: der Thread liest im
-    Takt, waehrend der Aufrufer weiterhin wt.input, wt.ranges oder
-    log_condition() benutzen darf. Zwei gangbare Wege:
+    ENTSCHIEDEN (ROADMAP M3-1, Maßnahme A2, 25.08.2026) - hier stand bis
+    hierher die offene Frage, ob diese Klasse intern serialisiert (Weg a) oder
+    exklusiv dem Mess-Thread gehoert (Weg b). Die Antwort ist BEIDES, aber in
+    verschiedenen Rollen:
 
-      (a) ein threading.RLock hier, gelegt um write/query/query_raw/
-          query_block. Er muss query_block() GANZ umschliessen, denn
-          _assemble_block() liest ueber self._transport.read() nach - sonst
-          liest der zweite Aufrufer mitten in einen fremden Block hinein.
-          Ebenfalls betroffen: set_timeout() in drain_after_failure(), das
-          gemeinsamen Transportzustand veraendert.
-      (b) die ausdrueckliche Zusage 'waehrend einer laufenden Measurement
-          gehoert die Sitzung dem Thread' - dann muss die Fassade jeden
-          anderen Zugriff ablehnen, solange is_running gilt.
+      Das RLock ist der MECHANISMUS. Es liegt um write/query/query_raw/
+      query_block und um drain_after_failure(). Es muss query_block() GANZ
+      umschliessen, denn _assemble_block() liest ueber self._transport.read()
+      nach - sonst liest der zweite Aufrufer mitten in einen fremden Block
+      hinein. drain_after_failure() ist aus demselben Grund als Ganzes
+      geschuetzt: es verstellt ueber set_timeout() gemeinsamen
+      Transportzustand und stellt ihn im 'finally' zurueck.
 
-    Weg (a) ist die kleinere Aenderung, Weg (b) die ehrlichere: ein Lock macht
-    einen Fremdzugriff mitten in der Messreihe zwar sicher, aber nicht
-    sinnvoll - er verschiebt den naechsten Takt.
+      Der Besitz ist die REGEL. 'claim()' traegt einen Thread als Eigentuemer
+      ein; jeder I/O-Aufruf aus einem anderen Thread endet danach in einer
+      ConcurrentAccessError statt in einer Warteschlange.
+
+    Warum nicht das Lock allein: es macht einen Fremdzugriff mitten in der
+    Messreihe zwar sicher, aber nicht sinnvoll - er verschiebt den naechsten
+    Takt und erzeugt einen Overrun, den hinterher niemand erklaeren kann. Ein
+    Aufrufer, der waehrend einer laufenden Messung 'wt.input' anfasst, hat
+    sich fast immer vertan; das soll er erfahren.
+
+    Warum nicht die Regel allein: sie liesse sich umgehen. Die Fachobjekte
+    ('wt.input', 'wt.ranges', ...) werden von der Fassade zwischengespeichert
+    - wer eine Referenz VOR dem Start geholt hat, kaeme an jeder Pruefung in
+    der Fassade vorbei. Hier unten kommt keiner vorbei: durch diese vier
+    Methoden geht jedes einzelne Byte.
+
+    Das Lock bleibt auch ohne Besitzer aktiv. Es kostet bei jedem Aufruf eine
+    unbestrittene Lock-Anforderung - gegen ein Messintervall von mindestens
+    0,05 s ist das nicht messbar - und schliesst dafuer die stille
+    Antwortvertauschung fuer jeden kuenftigen Nebenlaeufigkeitsfall, auch fuer
+    solche, die nicht ueber 'Measurement' laufen.
     """
 
     def __init__(self, transport: Transport, config: WTConfig, read_only: bool = False) -> None:
@@ -121,6 +155,94 @@ class WTSession:
         self._config = config
         self._read_only = read_only
         self._remote_active = False
+        # NEU (ROADMAP M3-1): RLock und nicht Lock - query_block() ruft
+        # query_raw(), beide nehmen ihn. Mit einem einfachen Lock verklemmte
+        # sich die Sitzung an ihrem ersten Blockdatenzugriff selbst.
+        self._lock = threading.RLock()
+        self._owner: int | None = None
+        self._owner_reason: str = ""
+
+    # -- Sitzungsbesitz (M3-1) ----------------------------------------------
+
+    @property
+    def owner(self) -> int | None:
+        """Thread-Kennung des Eigentuemers, oder None, wenn frei."""
+        return self._owner
+
+    def claim(self, thread_ident: int, reason: str) -> None:
+        """Die Sitzung einem Thread zuschlagen.
+
+        'reason' geht woertlich in die Meldung eines abgewiesenen
+        Fremdzugriffs ein - er soll benennen, WAS die Sitzung gerade tut, denn
+        das ist die Information, die dem Abgewiesenen fehlt.
+
+        Wird von 'Measurement.start()' gerufen, bevor der Mess-Thread
+        loslaeuft, und nicht vom Thread selbst: sonst gaebe es zwischen
+        'start()' und dem ersten Takt ein Fenster, in dem ein Fremdzugriff
+        noch durchginge. Ein Vertrag, der erst ein paar Millisekunden spaeter
+        gilt, ist keiner.
+        """
+        with self._lock:
+            if self._owner is not None and self._owner != thread_ident:
+                raise ConcurrentAccessError(
+                    f"Diese Sitzung gehoert bereits Thread {self._owner} "
+                    f"({self._owner_reason}). Zwei gleichzeitige Messungen auf einer "
+                    "Verbindung sind nicht moeglich - das Geraet hat genau eine."
+                )
+            self._owner = thread_ident
+            self._owner_reason = reason
+            self._log.debug("Sitzung an Thread %s vergeben (%s)", thread_ident, reason)
+
+    def release(self) -> None:
+        """Besitz aufgeben. Mehrfachaufruf ist unschaedlich."""
+        with self._lock:
+            if self._owner is None:
+                return
+            self._log.debug("Sitzung von Thread %s freigegeben", self._owner)
+            self._owner = None
+            self._owner_reason = ""
+
+    @contextmanager
+    def owned_by_current_thread(self, reason: str) -> Iterator["WTSession"]:
+        """'claim()' fuer den ausfuehrenden Thread, mit Rueckgabe im 'finally'.
+
+        Der bequeme Weg fuer alles, was NICHT 'Measurement' ist - etwa ein
+        Ablauf, der einen zusammenhaengenden Schreibvorgang gegen Fremdzugriff
+        abschirmen will.
+        """
+        self.claim(threading.get_ident(), reason)
+        try:
+            yield self
+        finally:
+            self.release()
+
+    def _check_owner(self, command: str) -> None:
+        """Fremdzugriff abweisen. Aufrufer haelt bereits das Lock."""
+        owner = self._owner
+        if owner is None or owner == threading.get_ident():
+            return
+        raise ConcurrentAccessError(
+            f"'{command}' aus Thread {threading.get_ident()} abgewiesen: die Sitzung "
+            f"gehoert Thread {owner} ({self._owner_reason}). Ein Zugriff von aussen "
+            "wuerde entweder die Antworten vertauschen oder den Messtakt verschieben. "
+            "Abhilfe: die Messung vorher mit stop() beenden, die noetigen Werte vor "
+            "dem Start lesen - oder statt des Hintergrundlaufs den Generator "
+            "'wt.measure.stream()' benutzen, der im eigenen Thread laeuft."
+        )
+
+    @contextmanager
+    def _exclusive(self, command: str) -> Iterator[None]:
+        """Lock nehmen und Besitz pruefen - in dieser Reihenfolge.
+
+        Die Reihenfolge ist der Punkt: erst das Lock, dann die Pruefung. Der
+        Mess-Thread haelt das Lock nur waehrend eines Zyklus, nicht dazwischen;
+        ein fremder Thread bekommt es also zwischen zwei Takten anstandslos -
+        und laeuft dann in die Besitzpruefung, statt bis zum Ende der
+        Messreihe zu blockieren.
+        """
+        with self._lock:
+            self._check_owner(command)
+            yield
 
     # -- Fernsteuerung ------------------------------------------------------
 
@@ -147,17 +269,20 @@ class WTSession:
     def write(self, command: str) -> None:
         """Set-Kommando senden (kein Query)."""
         self._validate(command, expect_query=False)
-        self._transport.write(command)
+        with self._exclusive(command):
+            self._transport.write(command)
 
     def query(self, command: str) -> str:
         """Genau einen Query absetzen und die Antwort als Text zurueckgeben."""
         self._validate(command, expect_query=True)
-        return self.decode(self._transport.query(command))
+        with self._exclusive(command):
+            return self.decode(self._transport.query(command))
 
     def query_raw(self, command: str) -> bytes:
         """Wie query(), liefert aber die unveraenderten Rohbytes."""
         self._validate(command, expect_query=True)
-        return self._transport.query(command)
+        with self._exclusive(command):
+            return self._transport.query(command)
 
     def query_block(self, command: str) -> bytes:
         """Query absetzen, dessen Antwort ein <Block data> mit '#n'-Header ist.
@@ -166,9 +291,15 @@ class WTSession:
         vollstaendig vorliegt. Damit ist es egal, ob TmcReceive den Block in
         einem Stueck liefert oder an einem 0x0A-Byte innerhalb der Binaerdaten
         abbricht (ZU VERIFIZIEREN, welches Verhalten tatsaechlich vorliegt).
+
+        NEU (ROADMAP M3-1): Das Lock umschliesst BEIDE Haelften. Der Grund
+        steht im Klassenkopf - '_assemble_block()' liest ueber
+        'self._transport.read()' nach, und ein zweiter Aufrufer, der sich
+        dazwischenschiebt, liest mitten in einen fremden Block hinein.
         """
-        raw = self.query_raw(command)
-        return self._assemble_block(raw)
+        with self._exclusive(command):
+            raw = self.query_raw(command)
+            return self._assemble_block(raw)
 
     def _assemble_block(self, raw: bytes) -> bytes:
         """'#4NNNN<daten>' auswerten und die Nutzlast vollstaendig einsammeln.
@@ -269,16 +400,24 @@ class WTSession:
     # -- Fehlerqueue --------------------------------------------------------
 
     def drain_after_failure(self) -> None:
-        """Nach einem fehlgeschlagenen Query eine verspaetete Antwort abraeumen."""
-        try:
-            self._transport.set_timeout(self._config.drain_timeout_ms)
-            leftover = self._transport.read()
-            if leftover:
-                self._log.warning("Nachlaufende Antwort verworfen: %r", leftover[:80])
-        except TmctlError:
-            pass  # Erwarteter Fall: nichts mehr da.
-        finally:
-            self._transport.set_timeout(self._config.timeout_ms)
+        """Nach einem fehlgeschlagenen Query eine verspaetete Antwort abraeumen.
+
+        NEU (ROADMAP M3-1): als Ganzes unter dem Lock. Die Methode verstellt
+        ueber 'set_timeout()' gemeinsamen Transportzustand und nimmt ihn im
+        'finally' zurueck - ein Zugriff dazwischen liefe in den kurzen
+        Drain-Timeout statt in den konfigurierten und sae einen Timeout, den
+        hinterher niemand erklaeren kann.
+        """
+        with self._exclusive("drain_after_failure()"):
+            try:
+                self._transport.set_timeout(self._config.drain_timeout_ms)
+                leftover = self._transport.read()
+                if leftover:
+                    self._log.warning("Nachlaufende Antwort verworfen: %r", leftover[:80])
+            except TmctlError:
+                pass  # Erwarteter Fall: nichts mehr da.
+            finally:
+                self._transport.set_timeout(self._config.timeout_ms)
 
     def read_error_queue(self, max_entries: int = 20) -> list[str]:
         """Fehlerqueue leeren. Hinweis: :STATus:ERRor? entfernt den Eintrag."""

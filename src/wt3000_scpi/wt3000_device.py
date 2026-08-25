@@ -47,7 +47,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,11 +78,17 @@ from .wt3000_itemspec import (
 )
 from .wt3000_measure import (
     LoopStatistics,
+    # NEU (ROADMAP M3-1): die steuerbare Messung und der Generator, auf dem
+    # sie sitzt. 'Sample' kommt dazu, weil stream() ihn als Elementtyp fuehrt.
+    Measurement,
     NumericHold,
+    Sample,
     SampleSink,
     build_harmonics_profile,
     build_integration_profile,
     build_standard_profile,
+    iter_samples,
+    prepare_update_rate,
     run_measurement_loop,
     write_metadata,
 )
@@ -721,10 +727,21 @@ class ItemAccess:
 class MeasureControl:
     """Messwerte lesen und aufzeichnen.
 
-    ZUM UMFANG: die Messschleife ist weiterhin blockierend und bricht nur ueber
-    Strg+C oder ein gesetztes Limit ab. Sie hier anzubinden macht sie
-    erreichbar, nicht steuerbar - das ist M3-1 (Aufzeichnung als Objekt mit
-    start()/stop()) und ausdruecklich nicht Teil von M1-1.
+    ZUM UMFANG (UEBERARBEITET, ROADMAP M3-1, 25.08.2026): Hier stand bis
+    hierher, die Messschleife sei "erreichbar, nicht steuerbar". Das gilt
+    nicht mehr - es gibt jetzt drei Wege, und die Wahl zwischen ihnen ist eine
+    Frage danach, WER den Takt treibt:
+
+        record()   blockierend. Der Aufrufer wartet, das Ende steht vorab
+                   fest (Limit) oder kommt per Strg+C. Der einfachste Weg und
+                   fuer Skripte mit bekanntem Ende weiterhin der richtige.
+        start()    Hintergrundlauf, liefert ein 'Measurement' mit start(),
+                   stop(), wait() und is_running. Fuer Ablaeufe, die waehrend
+                   der Messung andere Anlagenaktionen ausfuehren und von
+                   aussen beenden. Die Sitzung gehoert dann dem Mess-Thread.
+        stream()   Generator im Thread des Aufrufers. Fuer Ablaeufe, die je
+                   Sample entscheiden - und die einzige der drei Formen, bei
+                   der die Sitzung zwischen zwei Samples frei bleibt.
 
     ENTSCHIEDEN (21.08.2026), frueher hier als offene Zustaendigkeitsfrage
     notiert: Die Geraetesteuerung (':INTEGrate:STARt / :STOP / :RESet') sitzt
@@ -753,6 +770,42 @@ class MeasureControl:
         self._session = session
         self._items = items
         self._read_only = read_only
+        # NEU (ROADMAP M3-1): die zuletzt gestartete Hintergrundmessung. Wird
+        # gebraucht, damit 'WT3000.close()' sie beenden kann, bevor es selbst
+        # ans Geraet geht - siehe stop_active().
+        self._active: Measurement | None = None
+
+    # -- Laufende Hintergrundmessung ----------------------------------------
+
+    @property
+    def active(self) -> Measurement | None:
+        """Die zuletzt ueber 'start()' begonnene Messung, falls sie noch laeuft."""
+        if self._active is not None and self._active.is_running:
+            return self._active
+        return None
+
+    def stop_active(self, timeout: float | None = 10.0) -> None:
+        """Eine laufende Hintergrundmessung beenden, falls es eine gibt.
+
+        Gerufen von 'WT3000.close()', und zwar VOR dessen eigenen
+        Geraetezugriffen. Ohne diesen Schritt liefe close() in die eigene
+        Sperre: es sendet ':NUMeric:HOLD OFF', die Sitzung gehoert aber noch
+        dem Mess-Thread - der Aufraeumpfad scheiterte also ausgerechnet an dem
+        Schutz, der die Messung sauber halten soll.
+
+        Fehler aus dem Mess-Thread werden hier NUR protokolliert. close() ist
+        ein Aufraeumpfad; eine Ausnahme daraus verdeckt die Ursache, aus der
+        aufgeraeumt wird.
+        """
+        messung = self._active
+        self._active = None
+        if messung is None or not messung.is_running:
+            return
+        _log.info("Laufende Messung wird beendet (Sitzung wird geschlossen)")
+        try:
+            messung.stop(timeout)
+        except BaseException as error:  # bewusst breit - Aufraeumpfad
+            _log.error("Laufende Messung liess sich nicht sauber beenden: %s", error)
 
     # -- Einzelwerte --------------------------------------------------------
 
@@ -855,6 +908,143 @@ class MeasureControl:
             log_every=log_every,
             metadata=lauf_parameter,
             check_update_rate=check_update_rate,
+            mark_duplicates=mark_duplicates,
+        )
+
+    # -- Steuerbare Messung (M3-1) ------------------------------------------
+
+    def start(
+        self,
+        sink: SampleSink,
+        table: ItemTable,
+        interval_s: float = 1.0,
+        max_samples: int | None = None,
+        max_duration_s: float | None = None,
+        use_hold: bool = True,
+        record_condition: bool = True,
+        log_every: int = 0,
+        metadata_path: Path | None = None,
+        parameters: dict | None = None,
+        check_update_rate: bool = True,
+        mark_duplicates: bool = True,
+    ) -> Measurement:
+        """Eine Messung im Hintergrund starten und sofort zurueckkehren (M3-1).
+
+        Das Gegenstueck zu 'record()': dieselben Angaben, aber der Aufrufer
+        behaelt die Kontrolle.
+
+            messung = wt.measure.start(CsvSink(pfad), tabelle, interval_s=1.0)
+            pruefstand_fahren()
+            stats = messung.stop()
+
+        WAEHREND DES LAUFS gehoert die Sitzung dem Mess-Thread: 'wt.input',
+        'wt.ranges' und jeder andere Geraetezugriff aus dem Haupt-Thread endet
+        in einer ConcurrentAccessError. Wer beides braucht, nimmt
+        'stream()' - dort liegt der Takt im eigenen Thread, und zwischen zwei
+        Samples ist die Sitzung frei.
+
+        Die Rueckstellung von Bereichen und Item-Tabelle bleibt beim Aufrufer.
+        Die uebliche und sichere Form ist deshalb, beide Klammern zu setzen:
+
+            with wt.ranges.applied_ranges(plan):
+                with wt.measure.start(sink, tabelle) as messung:
+                    ...
+                # hier ist die Messung nachweislich beendet
+            # und erst hier werden die Bereiche zurueckgestellt
+        """
+        if use_hold and self._read_only:
+            _log.warning("Nur-Lesen-Sitzung: Messung laeuft ohne HOLD")
+            use_hold = False
+
+        lauf_parameter: dict[str, object] = {
+            "sample_interval_s": interval_s,
+            "max_samples": max_samples,
+            "max_duration_s": max_duration_s,
+            "use_hold": use_hold,
+            "record_condition": record_condition,
+            **(parameters or {}),
+        }
+
+        # Vor dem Start und damit im Haupt-Thread: danach gehoert die Sitzung
+        # dem Mess-Thread, und dieser Abzug ist ein Geraetezugriff.
+        if metadata_path is not None:
+            write_metadata(metadata_path, self._session, table, parameters=lauf_parameter)
+
+        messung = Measurement(
+            session=self._session,
+            table=table,
+            sink=sink,
+            interval_s=interval_s,
+            max_samples=max_samples,
+            max_duration_s=max_duration_s,
+            use_hold=use_hold,
+            record_condition=record_condition,
+            log_every=log_every,
+            metadata=lauf_parameter,
+            check_update_rate=check_update_rate,
+            mark_duplicates=mark_duplicates,
+        ).start()
+        self._active = messung
+        return messung
+
+    def stream(
+        self,
+        table: ItemTable,
+        interval_s: float = 1.0,
+        max_samples: int | None = None,
+        max_duration_s: float | None = None,
+        use_hold: bool = True,
+        record_condition: bool = True,
+        log_every: int = 0,
+        check_update_rate: bool = True,
+        mark_duplicates: bool = True,
+        stats: LoopStatistics | None = None,
+        # 'Generator' und nicht 'Iterator', damit der Aufrufer 'close()'
+        # aufrufen KANN - der Docstring unten verlangt es fuer den Abbruch
+        # mitten im Rumpf.
+    ) -> Generator[Sample, None, None]:
+        """Messwerte als Generator - der einfache Weg ohne Hintergrundthread (M3-1).
+
+            for sample in wt.measure.stream(tabelle, max_samples=10):
+                print(sample.values[0])
+                if abbruchbedingung():
+                    break
+
+        Der Unterschied zu 'start()' ist nicht der Komfort, sondern der
+        Thread: hier laeuft der Takt im Thread des AUFRUFERS. Daraus folgt
+        beides, was diesen Weg auszeichnet -
+
+          * Strg+C wirkt normal, weil Python SIGINT dem Haupt-Thread zustellt;
+          * die Sitzung gehoert niemandem, der Aufrufer darf also zwischen
+            zwei Samples 'wt.input' oder 'wt.integration' benutzen.
+
+        Der Preis ist ebenso deutlich: waehrend der Aufrufer arbeitet, laeuft
+        der Takt nicht weiter. Wer im Schleifenrumpf laenger braucht als
+        'interval_s', erzeugt Overruns - sie stehen wie immer in der
+        Statistik.
+
+        Eine Senke gibt es hier nicht; wer schreiben will, ruft 'sink.open()',
+        'sink.write(sample)' und 'sink.close()' selbst - oder nimmt 'record()'.
+        'stats' kann uebergeben werden, wenn die Statistik nach dem Lauf
+        gebraucht wird: der Generator fuellt sie im Lauf.
+        """
+        if use_hold and self._read_only:
+            _log.warning("Nur-Lesen-Sitzung: stream() laeuft ohne HOLD")
+            use_hold = False
+
+        gefuehrte_stats = stats if stats is not None else LoopStatistics()
+        prepare_update_rate(self._session, interval_s, gefuehrte_stats, check_update_rate)
+
+        return iter_samples(
+            session=self._session,
+            table=table,
+            stats=gefuehrte_stats,
+            interval_s=interval_s,
+            max_samples=max_samples,
+            max_duration_s=max_duration_s,
+            use_hold=use_hold,
+            record_condition=record_condition,
+            log_every=log_every,
             mark_duplicates=mark_duplicates,
         )
 
@@ -1686,6 +1876,13 @@ class WT3000:
         if self._closed:
             return
         self._closed = True
+
+        # NEU (ROADMAP M3-1): ZUERST. Eine laufende Hintergrundmessung besitzt
+        # die Sitzung; jeder Schritt unten wuerde sonst an der eigenen Sperre
+        # scheitern, und die Messung liefe als Daemon-Thread weiter, waehrend
+        # der Transport unter ihr geschlossen wird.
+        if self._measure is not None:
+            self._measure.stop_active()
 
         if not self._read_only:
             try:

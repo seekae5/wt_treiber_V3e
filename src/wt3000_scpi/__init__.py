@@ -63,6 +63,7 @@ from __future__ import annotations
 # von Hand baut, importiert aus dem zustaendigen Fachmodul und sieht damit
 # schon am Import, in welcher Schicht er arbeitet.
 from .wt3000_core import (
+    ConcurrentAccessError,
     DeviceError,
     ProtocolError,
     ReadOnlyViolation,
@@ -123,7 +124,13 @@ from .wt3000_input import (
 # NEU (M4-1): der Datensatz. Er steht hier neben der Fassade und nicht nur im
 # Fachmodul, weil ab M4-2 jedes Ausgabeformat gegen ihn gebaut wird - wer einen
 # eigenen Sink schreibt, soll ihn aus der Paketwurzel holen koennen wie 'WT3000'.
+# NEU (M3-1): die steuerbare Messung. 'Measurement' steht hier neben der
+# Fassade, weil 'wt.measure.start()' der uebliche Weg zu ihr ist - der
+# Rueckgabetyp gehoert damit zur oeffentlichen Oberflaeche. 'LoopStatistics'
+# kommt mit, weil start(), stop() und wait() sie liefern.
 from .wt3000_measure import (
+    LoopStatistics,
+    Measurement,
     Sample,
     SampleMark,
     SampleSink,
@@ -159,6 +166,7 @@ __all__ = [
     "ProtocolError",
     "DeviceError",
     "ReadOnlyViolation",
+    "ConcurrentAccessError",
     "ConfigLocked",
     "ChangesNotAllowed",
     "VerificationError",
@@ -198,6 +206,9 @@ __all__ = [
     "build_standard_profile",
     "build_integration_profile",
     "build_harmonics_profile",
+    # Steuerbare Messung (M3-1)
+    "Measurement",
+    "LoopStatistics",
     # Datensatz (M4-1)
     "Sample",
     "SampleMark",

@@ -20,8 +20,12 @@ import logging
 # UEBERARBEITET (F-01, siehe AENDERUNGEN_2026-08-18.md): 'import math' entfernt -
 # das Modul wurde hier nie benutzt.
 import statistics
+# NEU (ROADMAP M3-1): der Hintergrundlauf. 'threading' steht hier und nicht in
+# der Fassade, weil das Stoppsignal zur Schleife gehoert und nicht zum
+# Aufrufer - siehe 'Measurement'.
+import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -676,6 +680,9 @@ def run_measurement_loop(
     # Voreinstellung AN - wer sie abschaltet, soll das ausdruecklich tun.
     check_update_rate: bool = True,
     mark_duplicates: bool = True,
+    # NEU (ROADMAP M3-1): das Stoppsignal von 'Measurement'. Ohne
+    # Hintergrundlauf bleibt es None und die Schleife verhaelt sich wie bisher.
+    stop_event: threading.Event | None = None,
 ) -> LoopStatistics:
     """Messschleife mit driftfreier Taktung.
 
@@ -719,46 +726,33 @@ def run_measurement_loop(
     Funktion nicht belegt" und ist von "dimensionslos" (leere Zeichenkette)
     unterschieden - siehe FUNCTION_UNITS in wt3000_numeric.py.
 
-    OFFEN (ROADMAP M3-1): Diese Funktion wird der Rumpf der Klasse
-    'Measurement'. Drei Stellen sind dabei anzupassen und nicht bloss zu
-    verschieben:
-
-      1. 'except KeyboardInterrupt' wird wirkungslos, sobald die Schleife in
-         einem Hintergrund-Thread laeuft - Python stellt SIGINT ausschliesslich
-         dem Haupt-Thread zu. Der Abbruch per Strg+C gehoert dann auf die
-         Aufruferseite (stop()/wait()), nicht hierher. Als blockierender
-         Generator 'stream()' bleibt er dagegen richtig, wo er ist.
-      2. 'time.sleep(wait)' muss 'stop_event.wait(wait)' werden, sonst greift
-         stop() erst nach dem laufenden Intervall. Bei :RATE 5 s sind das fuenf
-         Sekunden Verzug auf ein Stoppsignal - genau der Fall, den M3-1 mit
-         'threading.Event als Stoppsignal, nicht als Flag' meint.
-      3. Rueckstellung: HOLD wird hier bereits im 'with' zurueckgenommen und
-         greift damit auch bei stop(). Bereiche und Item-Tabelle liegen
-         dagegen beim Aufrufer (wt3000_ranging.applied_ranges(),
-         ItemAccess.applied()) - M3-1 verlangt sie im Thread. Wer diese
-         Context Manager kuenftig haelt, ist vor dem ersten Handgriff zu
-         entscheiden; es verschiebt die Verantwortung fuer den Geraetezustand.
-
     ERLEDIGT (ROADMAP M4-1): der Rueckgabeweg. Die Schleife baut je Zyklus ein
-    'Sample' und reicht genau das an die Ausgabe weiter. Der von M3-1
-    geforderte Generator 'stream()' hat damit bereits etwas zu liefern - aus
-    'recorder.write(datensatz)' wird ein 'yield datensatz', und die Erkennung
-    aus M3-3/M3-4 setzt nur noch 'Sample.mark'. Eine zweite Signatur entsteht
-    dabei nicht mehr.
+    'Sample' und reicht genau das an die Ausgabe weiter.
+
+    ERLEDIGT (ROADMAP M3-1, 25.08.2026): Der Rumpf ist der Generator
+    'iter_samples()' geworden. Diese Funktion ist jetzt der BLOCKIERENDE der
+    drei Wege, die auf ihm sitzen:
+
+        run_measurement_loop()  blockierend, schreibt in eine Senke
+        iter_samples()          Generator, liefert Samples an den Aufrufer
+        Measurement             Hintergrundlauf mit start()/stop()/wait()
+
+    Zwei Dinge bleiben deshalb hier und wandern nicht mit:
+
+      * 'except KeyboardInterrupt'. Es gehoert dorthin, wo die Schleife im
+        Thread des Aufrufers laeuft - Python stellt SIGINT ausschliesslich dem
+        Haupt-Thread zu. Im Hintergrundlauf waere es wirkungslos; dort ist
+        'stop()' der Abbruchweg.
+      * Der Lebenszyklus der Senke. Der Generator kennt kein Ausgabeformat.
+
+    'stop_event' ist der Weg, auf dem 'Measurement' seinen Abbruch hier
+    hereinreicht; ohne Hintergrundlauf bleibt es None.
     """
     stats = LoopStatistics()
 
     # NEU (ROADMAP M3-3): VOR dem Oeffnen der Senke - die Rate gehoert in die
     # Metadaten, und die Metadaten gehen mit 'open()' hinaus.
-    if check_update_rate:
-        stats.update_rate_s = device_update_rate(session)
-        check_sample_interval(interval_s, stats.update_rate_s)
-
-    started_monotonic = time.monotonic()
-    next_tick = started_monotonic
-    # UEBERARBEITET (M4-1): hiess 'sample'. Der Name ist an den Typ 'Sample'
-    # gegangen; der Zaehler heisst wie das Feld, das er fuellt.
-    number = 0
+    prepare_update_rate(session, interval_s, stats, check_update_rate)
 
     # NEU (M4-2): Die Spaltennamen entstehen hier und nicht mehr beim Aufrufer -
     # sie stehen in der Item-Tabelle, gegen die auch gemessen wird. Damit koennen
@@ -774,163 +768,227 @@ def run_measurement_loop(
     ausgabe_metadaten.setdefault("units", table.unit_map())
 
     sink.open([item.key for item in table.items], ausgabe_metadaten)
+    strom = iter_samples(
+        session=session,
+        table=table,
+        stats=stats,
+        interval_s=interval_s,
+        max_samples=max_samples,
+        max_duration_s=max_duration_s,
+        use_hold=use_hold,
+        record_condition=record_condition,
+        log_every=log_every,
+        mark_duplicates=mark_duplicates,
+        stop_event=stop_event,
+    )
     try:
-        return _loop_body(
-            session=session,
-            table=table,
-            sink=sink,
-            stats=stats,
-            mark_duplicates=mark_duplicates,
-            started_monotonic=started_monotonic,
-            next_tick=next_tick,
-            number=number,
-            interval_s=interval_s,
-            max_samples=max_samples,
-            max_duration_s=max_duration_s,
-            use_hold=use_hold,
-            record_condition=record_condition,
-            log_every=log_every,
-        )
+        for sample in strom:
+            sink.write(sample)
+    except KeyboardInterrupt:
+        _log.info("Abbruch durch Benutzer (Strg+C) nach %d Samples", stats.samples)
     finally:
+        # Die Reihenfolge ist hier nicht beliebig, und der Generator steht
+        # ZUERST: solange er nur ausgesetzt ist, haelt er HOLD.
+        #
+        # Der Fall, den 'close()' abdeckt und ein blosses Verlassen der
+        # Schleife nicht: eine Ausnahme im RUMPF - etwa ein Strg+C, das
+        # waehrend 'sink.write()' eintrifft. Dann ist der Generator am 'yield'
+        # ausgesetzt, sein 'finally' hat nicht gelaufen, und ohne diesen
+        # Aufruf haenge HOLD bis zur naechsten Speicherbereinigung. Das Geraet
+        # liefert danach eingefrorene Werte, waehrend die Anzeige weiterlaeuft.
+        # (Laeuft der Generator dagegen von selbst aus oder wirft er selbst,
+        # ist er bereits beendet und 'close()' tut nichts.)
+        strom.close()
         # Auch bei Fehler, Abbruch und Strg+C. Die Senke ist das Einzige, was
         # ausserhalb des Prozesses weiterlebt.
         sink.close()
+    return stats
 
 
-def _loop_body(
+def prepare_update_rate(
+    session: WTSession,
+    interval_s: float,
+    stats: LoopStatistics,
+    check_update_rate: bool,
+) -> None:
+    """':RATE?' lesen und den Takt dagegen pruefen (M3-3).
+
+    Ausgelagert, weil es VOR dem ersten Zyklus geschehen muss und damit vor
+    dem ersten 'yield' eines Generators - der laeuft aber erst beim ersten
+    'next()' an. Beide Aufrufer (die blockierende Schleife und 'Measurement')
+    rufen es deshalb selbst, bevor sie die Senke oeffnen.
+    """
+    if not check_update_rate:
+        return
+    stats.update_rate_s = device_update_rate(session)
+    check_sample_interval(interval_s, stats.update_rate_s)
+
+
+def iter_samples(
     *,
     session: WTSession,
     table: ItemTable,
-    sink: SampleSink,
     stats: LoopStatistics,
-    mark_duplicates: bool,
-    started_monotonic: float,
-    next_tick: float,
-    number: int,
     interval_s: float,
     max_samples: int | None,
     max_duration_s: float | None,
     use_hold: bool,
     record_condition: bool,
     log_every: int,
-) -> LoopStatistics:
-    """Die eigentliche Schleife. Getrennt, damit 'finally' oben lesbar bleibt."""
+    mark_duplicates: bool = True,
+    stop_event: threading.Event | None = None,
+    # 'Generator' und nicht 'Iterator': nur der erste Typ sagt zu, dass
+    # 'close()' vorhanden ist - und genau darauf verlassen sich
+    # 'run_measurement_loop()' und 'Measurement._run()', um HOLD auch dann
+    # zurueckzunehmen, wenn die Ausnahme im Schleifenrumpf entstand.
+) -> Generator[Sample, None, None]:
+    """Der Rumpf der Messung als Generator - liefert je Zyklus ein 'Sample'.
+
+    NEU (ROADMAP M3-1). Hier liegt ab jetzt die eigentliche Schleife; die drei
+    Wege darueber (blockierend, Generator, Hintergrundlauf) unterscheiden sich
+    nur noch darin, was sie mit den Samples anfangen und wer sie antreibt.
+
+    Was der Generator NICHT kennt: Ausgabeformate, Metadaten, Strg+C. Die
+    gehoeren zum Aufrufer. Was er dagegen selbst zusagt, weil es sonst
+    niemand kann: HOLD wird im 'finally' des 'with' zurueckgenommen. Das gilt
+    auch, wenn der Aufrufer den Generator vorzeitig fallen laesst - Python
+    wirft ihm dann ein GeneratorExit hinein, und das 'finally' laeuft.
+
+    'stats' wird IM LAUF fortgeschrieben und nicht am Ende zurueckgegeben.
+    Damit kann ein Aufrufer den Fortschritt einer laufenden Messung ansehen -
+    'Measurement.stats' tut genau das.
+
+    'stop_event' ersetzt das Warten zwischen zwei Takten. Der Unterschied ist
+    nicht kosmetisch: mit 'time.sleep()' greift ein Stoppsignal erst nach dem
+    laufenden Intervall, bei ':RATE 20 s' also bis zu zwanzig Sekunden
+    spaeter. 'Event.wait()' kehrt sofort zurueck.
+    """
     # NEU (ROADMAP M3-3): der Rohblock des vorigen Zyklus. Nur er entscheidet
     # ueber eine Dublette - zur Begruendung siehe read_numeric_block().
     previous_payload: bytes | None = None
 
-    with NumericHold(session, enabled=use_hold) as hold:
-        try:
-            while True:
-                if max_samples is not None and number >= max_samples:
-                    _log.info("Sampleanzahl erreicht (%d)", max_samples)
-                    break
-                elapsed = time.monotonic() - started_monotonic
-                if max_duration_s is not None and elapsed >= max_duration_s:
-                    _log.info("Maximaldauer erreicht (%.1f s)", max_duration_s)
-                    break
+    started_monotonic = time.monotonic()
+    next_tick = started_monotonic
+    # UEBERARBEITET (M4-1): hiess 'sample'. Der Name ist an den Typ 'Sample'
+    # gegangen; der Zaehler heisst wie das Feld, das er fuellt.
+    number = 0
 
-                # Auf den naechsten Takt warten.
-                wait = next_tick - time.monotonic()
-                if wait > 0:
+    with NumericHold(session, enabled=use_hold) as hold:
+        while True:
+            if max_samples is not None and number >= max_samples:
+                _log.info("Sampleanzahl erreicht (%d)", max_samples)
+                break
+            elapsed = time.monotonic() - started_monotonic
+            if max_duration_s is not None and elapsed >= max_duration_s:
+                _log.info("Maximaldauer erreicht (%.1f s)", max_duration_s)
+                break
+            # NEU (ROADMAP M3-1): auch am Schleifenkopf pruefen, nicht nur
+            # beim Warten. Sonst haenge ein 'stop()', das waehrend eines
+            # langsamen Lesevorgangs kommt, noch einen vollen Zyklus an.
+            if stop_event is not None and stop_event.is_set():
+                _log.info("Stoppsignal erhalten nach %d Samples", number)
+                break
+
+            # Auf den naechsten Takt warten.
+            wait = next_tick - time.monotonic()
+            if wait > 0:
+                if stop_event is not None:
+                    if stop_event.wait(wait):
+                        _log.info("Stoppsignal erhalten nach %d Samples", number)
+                        break
+                else:
                     time.sleep(wait)
 
-                cycle_start = time.monotonic()
+            cycle_start = time.monotonic()
 
-                # Snapshot einfrieren, dann lesen. Der Zeitstempel bezieht sich
-                # auf den Moment des HOLD ON, nicht auf den Antworteingang.
-                hold.refresh()
-                timestamp = datetime.now(timezone.utc).astimezone()
-                # UEBERARBEITET (ROADMAP M3-3): derselbe Lesevorgang, aber
-                # mit den Rohbytes - sie sind die Grundlage des Vergleichs.
-                payload, values = read_numeric_block(
-                    session, expected_count=len(table.items)
+            # Snapshot einfrieren, dann lesen. Der Zeitstempel bezieht sich
+            # auf den Moment des HOLD ON, nicht auf den Antworteingang.
+            hold.refresh()
+            timestamp = datetime.now(timezone.utc).astimezone()
+            # UEBERARBEITET (ROADMAP M3-3): derselbe Lesevorgang, aber
+            # mit den Rohbytes - sie sind die Grundlage des Vergleichs.
+            payload, values = read_numeric_block(
+                session, expected_count=len(table.items)
+            )
+
+            mark = SampleMark.OK
+            if mark_duplicates:
+                if previous_payload is not None and payload == previous_payload:
+                    mark = SampleMark.DUPLICATE
+                    stats.duplicates += 1
+                    # Gestaffelt wie die Overrun-Meldung: die erste
+                    # Dublette ist eine Nachricht, die tausendste ist
+                    # Laerm. Ueber Stunden bleibt das Protokoll lesbar,
+                    # ohne dass der Befund untergeht.
+                    if stats.duplicates in (1, 10, 100) or stats.duplicates % 500 == 0:
+                        _log.warning(
+                            "Zyklus %d ist bitgleich zum vorigen - das Geraet hat "
+                            "nicht aktualisiert. Dubletten bisher: %d",
+                            number + 1,
+                            stats.duplicates,
+                        )
+                previous_payload = payload
+
+            condition: int | None = None
+            if record_condition:
+                # UEBERARBEITET (Schritt 5b, Befund A-06): die kritischste der
+                # sechs Stellen - sie liegt INNERHALB der laufenden Schleife.
+                # Ein ValueError beendete hier eine womoeglich stundenlange
+                # Messreihe mit einem Traceback statt mit dem sauberen Abbruch,
+                # fuer den diese Schleife gebaut ist.
+                #
+                # Bewusst OHNE condition_warnings(): eine Warnung je Zyklus
+                # ueber Stunden nuetzt niemandem. Der Zustand wird aufgezeichnet,
+                # nicht kommentiert.
+                condition = parse_condition(session.query(":STATus:CONDition?"))
+
+            number += 1
+            stats.samples = number
+            for value in values:
+                stats.status_counts[value.status] += 1
+
+            # NEU (M4-1): der Zyklus wird zu EINEM Gegenstand
+            # zusammengefasst, bevor er die Schleife verlaesst. Ab hier
+            # kennt die Ausgabeseite nur noch diesen Typ.
+            # UEBERARBEITET (ROADMAP M3-1): aus 'sink.write(...)' ist das
+            # 'yield' geworden, das M4-1 hier bereits vorgesehen hatte. Die
+            # Schleife kennt seither nicht einmal mehr eine Senke.
+            yield Sample(
+                timestamp=timestamp,
+                elapsed_s=cycle_start - started_monotonic,
+                number=number,
+                condition=condition,
+                values=values,
+                mark=mark,
+            )
+
+            cycle_time = time.monotonic() - cycle_start
+            stats.cycle_times.append(cycle_time)
+
+            if log_every > 0 and number % log_every == 0:
+                _log.info(
+                    "Sample %d | Zyklus %.3f s | Condition %s | %s",
+                    number,
+                    cycle_time,
+                    "-" if condition is None else condition,
+                    _preview(table, values),
                 )
 
-                mark = SampleMark.OK
-                if mark_duplicates:
-                    if previous_payload is not None and payload == previous_payload:
-                        mark = SampleMark.DUPLICATE
-                        stats.duplicates += 1
-                        # Gestaffelt wie die Overrun-Meldung: die erste
-                        # Dublette ist eine Nachricht, die tausendste ist
-                        # Laerm. Ueber Stunden bleibt das Protokoll lesbar,
-                        # ohne dass der Befund untergeht.
-                        if stats.duplicates in (1, 10, 100) or stats.duplicates % 500 == 0:
-                            _log.warning(
-                                "Zyklus %d ist bitgleich zum vorigen - das Geraet hat "
-                                "nicht aktualisiert. Dubletten bisher: %d",
-                                number + 1,
-                                stats.duplicates,
-                            )
-                    previous_payload = payload
-
-                condition: int | None = None
-                if record_condition:
-                    # UEBERARBEITET (Schritt 5b, Befund A-06): die kritischste der
-                    # sechs Stellen - sie liegt INNERHALB der laufenden Schleife.
-                    # Ein ValueError beendete hier eine womoeglich stundenlange
-                    # Messreihe mit einem Traceback statt mit dem sauberen Abbruch,
-                    # fuer den _loop_body gebaut ist.
-                    #
-                    # Bewusst OHNE condition_warnings(): eine Warnung je Zyklus
-                    # ueber Stunden nuetzt niemandem. Der Zustand wird aufgezeichnet,
-                    # nicht kommentiert.
-                    condition = parse_condition(session.query(":STATus:CONDition?"))
-
-                number += 1
-                stats.samples = number
-                for value in values:
-                    stats.status_counts[value.status] += 1
-
-                # NEU (M4-1): der Zyklus wird zu EINEM Gegenstand
-                # zusammengefasst, bevor er die Schleife verlaesst. Ab hier
-                # kennt die Ausgabeseite nur noch diesen Typ - und der
-                # Generator 'stream()' aus M3-1 hat schon jetzt etwas zu
-                # liefern, ohne dass die Schleife noch einmal umgebaut wird.
-                sink.write(
-                    Sample(
-                        timestamp=timestamp,
-                        elapsed_s=cycle_start - started_monotonic,
-                        number=number,
-                        condition=condition,
-                        values=values,
-                        mark=mark,
-                    )
-                )
-
-                cycle_time = time.monotonic() - cycle_start
-                stats.cycle_times.append(cycle_time)
-
-                if log_every > 0 and number % log_every == 0:
-                    _log.info(
-                        "Sample %d | Zyklus %.3f s | Condition %s | %s",
+            # Naechsten Takt setzen. Bei Overrun wird der Takt neu
+            # aufgesetzt, statt aufzuholen.
+            next_tick += interval_s
+            if next_tick < time.monotonic():
+                stats.overruns += 1
+                if stats.overruns in (1, 10, 100) or stats.overruns % 500 == 0:
+                    _log.warning(
+                        "Zyklus %d ueberschreitet das Intervall (%.3f s > %.3f s), "
+                        "Overruns bisher: %d",
                         number,
                         cycle_time,
-                        "-" if condition is None else condition,
-                        _preview(table, values),
+                        interval_s,
+                        stats.overruns,
                     )
-
-                # Naechsten Takt setzen. Bei Overrun wird der Takt neu
-                # aufgesetzt, statt aufzuholen.
-                next_tick += interval_s
-                if next_tick < time.monotonic():
-                    stats.overruns += 1
-                    if stats.overruns in (1, 10, 100) or stats.overruns % 500 == 0:
-                        _log.warning(
-                            "Zyklus %d ueberschreitet das Intervall (%.3f s > %.3f s), "
-                            "Overruns bisher: %d",
-                            number,
-                            cycle_time,
-                            interval_s,
-                            stats.overruns,
-                        )
-                    next_tick = time.monotonic() + interval_s
-
-        except KeyboardInterrupt:
-            _log.info("Abbruch durch Benutzer (Strg+C) nach %d Samples", number)
-
-    return stats
+                next_tick = time.monotonic() + interval_s
 
 
 def _preview(table: ItemTable, values: list[NumericValue], count: int = 3) -> str:
@@ -939,3 +997,283 @@ def _preview(table: ItemTable, values: list[NumericValue], count: int = 3) -> st
         f"{item.key}={value}" for item, value in list(zip(table.items, values))[:count]
     ]
     return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Die steuerbare Messung (M3-1)
+# ---------------------------------------------------------------------------
+
+
+class Measurement:
+    """Eine Messreihe als Gegenstand: start(), stop(), wait(), is_running.
+
+    NEU (ROADMAP M3-1, Rang 1 der Bewertung). Bis hierher hiess 'Messung
+    starten' im Treiber 'die blockierende Schleife aufrufen' - ein Ablauf
+    konnte waehrenddessen nichts anderes tun, und beenden liess sie sich nur
+    ueber ein vorab bekanntes Limit oder Strg+C. Diese Klasse schliesst genau
+    diese Luecke:
+
+        with wt.ranges.applied_ranges(plan):        # Konfiguration
+            messung = wt.measure.start(CsvSink(pfad), tabelle, interval_s=1.0)
+            pruefstand_fahren()                     # andere Anlagenaktionen
+            messung.stop()                          # externe Stopbedingung
+            stats = messung.wait()
+
+    ZUM SITZUNGSBESITZ (Maßnahme A2, entschieden am 25.08.2026): Ein
+    laufendes 'Measurement' BESITZT seine Sitzung. Jeder Zugriff aus einem
+    anderen Thread - 'wt.input', 'wt.ranges', 'log_condition()' - endet
+    waehrenddessen in einer ConcurrentAccessError. Die Begruendung steht im
+    Klassenkopf von 'WTSession'; kurz: der Zugriff wuerde entweder Antworten
+    vertauschen oder den Messtakt verschieben, und beides faellt hinterher
+    niemandem mehr auf. Wer waehrend der Messung lesen muss, benutzt
+    'wt.measure.stream()' und liest zwischen zwei Samples im eigenen Thread.
+
+    ZUR RUECKSTELLUNG (dritte Umbaustelle aus dem Docstring von
+    'run_measurement_loop()'): HOLD nimmt der Generator selbst zurueck, auch
+    bei stop() und bei einem Fehler. Bereiche und Item-Tabelle bleiben
+    dagegen ausdruecklich beim AUFRUFER ('applied_ranges()',
+    'ItemAccess.applied()') und wandern NICHT in den Thread. Sonst faende die
+    Rueckstellung zu einem Zeitpunkt statt, den der Aufrufer nicht kennt -
+    und zwar als Geraetezugriff aus dem Mess-Thread, waehrend der Haupt-Thread
+    womoeglich schon weiterarbeitet. Damit die Konfigurationsklammer nicht vor
+    der Messung schliessen kann, ist diese Klasse selbst ein Context Manager:
+    ihr '__exit__' stoppt und wartet ab.
+
+    EINWEG: Ein 'Measurement' laesst sich genau einmal starten. Ein zweiter
+    Lauf ist ein zweites Objekt - schon weil die Senke nach dem ersten Lauf
+    geschlossen ist.
+    """
+
+    def __init__(
+        self,
+        *,
+        session: WTSession,
+        table: ItemTable,
+        sink: SampleSink,
+        interval_s: float = 1.0,
+        max_samples: int | None = None,
+        max_duration_s: float | None = None,
+        use_hold: bool = True,
+        record_condition: bool = True,
+        log_every: int = 0,
+        metadata: Mapping[str, object] | None = None,
+        check_update_rate: bool = True,
+        mark_duplicates: bool = True,
+    ) -> None:
+        self._session = session
+        self._table = table
+        self._sink = sink
+        self._interval_s = interval_s
+        self._max_samples = max_samples
+        self._max_duration_s = max_duration_s
+        self._use_hold = use_hold
+        self._record_condition = record_condition
+        self._log_every = log_every
+        self._metadata = dict(metadata or {})
+        self._check_update_rate = check_update_rate
+        self._mark_duplicates = mark_duplicates
+
+        self._stats = LoopStatistics()
+        self._thread: threading.Thread | None = None
+        # Das Stoppsignal. 'Event' und nicht 'bool': nur damit kehrt das
+        # Warten zwischen zwei Takten sofort zurueck (M3-1).
+        self._stop = threading.Event()
+        # Startfreigabe - siehe start(). Schliesst das Fenster zwischen
+        # 'Thread.start()' und 'session.claim()'.
+        self._go = threading.Event()
+        self._aborted = False
+        self._error: BaseException | None = None
+
+    # -- Zustand ------------------------------------------------------------
+
+    @property
+    def is_running(self) -> bool:
+        """Laeuft der Mess-Thread noch?"""
+        return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def stats(self) -> LoopStatistics:
+        """Die Statistik - waehrend des Laufs fortgeschrieben, nicht erst danach.
+
+        Der Fortschritt einer laufenden Messung ist damit ansehbar
+        ('messung.stats.samples'), ohne die Sitzung anzufassen. Das ist der
+        einzige Weg, der waehrend eines Hintergrundlaufs ohne
+        ConcurrentAccessError funktioniert - er fragt nicht das Geraet,
+        sondern die Schleife.
+        """
+        return self._stats
+
+    @property
+    def error(self) -> BaseException | None:
+        """Die Ausnahme aus dem Mess-Thread, falls eine aufgetreten ist."""
+        return self._error
+
+    # -- Steuerung ----------------------------------------------------------
+
+    def start(self) -> "Measurement":
+        """Den Hintergrundlauf beginnen. Kehrt sofort zurueck.
+
+        Die Reihenfolge hier ist der eigentliche Inhalt der Methode:
+
+          1. Thread anlegen und starten - er blockiert sofort auf '_go'.
+             Erst dadurch steht seine Thread-Kennung ueberhaupt fest.
+          2. Die Sitzung auf DIESE Kennung eintragen.
+          3. '_go' freigeben.
+
+        Wuerde der Thread den Besitz selbst eintragen, gaebe es zwischen
+        'start()' und dem ersten Takt ein Fenster, in dem ein Fremdzugriff
+        noch durchginge - und der Vertrag 'waehrend der Messung gehoert die
+        Sitzung dem Thread' gaelte erst ein paar Millisekunden spaeter.
+        """
+        if self._thread is not None:
+            raise WTError(
+                "Diese Messung laeuft bereits oder ist beendet - ein 'Measurement' "
+                "ist einmal verwendbar. Fuer einen zweiten Lauf ein neues anlegen "
+                "(die Senke des ersten ist geschlossen)."
+            )
+
+        thread = threading.Thread(target=self._run, name="wt3000-measurement", daemon=True)
+        thread.start()
+        assert thread.ident is not None  # von Thread.start() zugesichert
+        try:
+            self._session.claim(thread.ident, "laufende Messung (M3-1)")
+        except WTError:
+            # Den soeben gestarteten Thread nicht haengen lassen: er wartet
+            # auf '_go' und wuerde es sonst bis zum Prozessende tun.
+            self._aborted = True
+            self._go.set()
+            thread.join(timeout=5.0)
+            raise
+
+        self._thread = thread
+        self._go.set()
+        _log.info(
+            "Messung gestartet (Takt %.3f s, Grenze: %s Samples / %s s)",
+            self._interval_s,
+            self._max_samples if self._max_samples is not None else "-",
+            self._max_duration_s if self._max_duration_s is not None else "-",
+        )
+        return self
+
+    def stop(self, timeout: float | None = None) -> LoopStatistics:
+        """Stoppsignal setzen und auf das Ende warten.
+
+        Das Signal greift sofort und nicht erst nach dem laufenden Intervall -
+        dafuer ist es ein 'Event' und kein Flag. Ein bereits begonnener
+        Lesevorgang wird noch zu Ende gefuehrt; ein halb gelesener Datensatz
+        waere der eine Fall, den die Senke nicht sauber wegschreiben kann.
+        """
+        if self._thread is None:
+            raise WTError("Diese Messung wurde nie gestartet - stop() ohne start()")
+        self._stop.set()
+        return self.wait(timeout)
+
+    def wait(self, timeout: float | None = None) -> LoopStatistics:
+        """Auf das Ende warten und die Statistik liefern.
+
+        Ein Fehler aus dem Mess-Thread wird HIER erneut ausgeloest. Das ist
+        die einzige Stelle, an der er den Aufrufer ueberhaupt erreichen kann:
+        eine Ausnahme in einem Thread beendet nur diesen Thread und wuerde
+        sonst als Textausgabe von 'threading' enden - also als etwas, das kein
+        'except' je faengt und keine Ablaufsteuerung bemerkt.
+        """
+        if self._thread is None:
+            raise WTError("Diese Messung wurde nie gestartet - wait() ohne start()")
+
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise WTError(
+                f"Messung laeuft nach {timeout} s noch. Ohne Limit laeuft sie "
+                "unbegrenzt - stop() beendet sie."
+            )
+        if self._error is not None:
+            raise self._error
+        return self._stats
+
+    # -- Context Manager ----------------------------------------------------
+
+    def __enter__(self) -> "Measurement":
+        """Startet, falls noch nicht gestartet."""
+        if self._thread is None:
+            self.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Stoppen und abwarten - damit keine Messung ihre Klammer ueberlebt.
+
+        Der Grund steht im Klassenkopf: schliesst die Konfigurationsklammer
+        ('applied_ranges()') vor der Messung, stellt sie Bereiche zurueck,
+        waehrend noch gemessen wird.
+        """
+        if self._thread is None:
+            return
+        self._stop.set()
+        try:
+            self.wait()
+        except BaseException:
+            # Eine bereits laufende Ausnahme ist die aeltere Nachricht und
+            # wiegt schwerer - der Fehler aus dem Thread wird dann
+            # protokolliert statt sie zu verdecken.
+            if exc_type is None:
+                raise
+            _log.exception("Fehler beim Beenden der Messung; urspruengliche Ausnahme bleibt")
+
+    # -- Der Thread ---------------------------------------------------------
+
+    def _run(self) -> None:
+        """Der Rumpf des Mess-Threads.
+
+        CLEANUP IM AUSFUEHRENDEN ABLAUF (M3-1): Senke oeffnen UND schliessen
+        geschieht hier, nicht beim Aufrufer. Wer 'wait()' vergisst, verliert
+        dadurch hoechstens die Statistik - nie eine offene Datei.
+        """
+        self._go.wait()
+        if self._aborted:
+            return
+        try:
+            # Erst jetzt, unter dem Besitz: es ist ein Geraetezugriff.
+            prepare_update_rate(
+                self._session, self._interval_s, self._stats, self._check_update_rate
+            )
+
+            metadaten: dict[str, object] = dict(self._metadata)
+            metadaten.setdefault("update_rate_s", self._stats.update_rate_s)
+            metadaten.setdefault("units", self._table.unit_map())
+
+            self._sink.open([item.key for item in self._table.items], metadaten)
+            strom = iter_samples(
+                session=self._session,
+                table=self._table,
+                stats=self._stats,
+                interval_s=self._interval_s,
+                max_samples=self._max_samples,
+                max_duration_s=self._max_duration_s,
+                use_hold=self._use_hold,
+                record_condition=self._record_condition,
+                log_every=self._log_every,
+                mark_duplicates=self._mark_duplicates,
+                stop_event=self._stop,
+            )
+            try:
+                for sample in strom:
+                    self._sink.write(sample)
+            finally:
+                # Generator vor Senke - die Begruendung steht in
+                # 'run_measurement_loop()'. Hier wiegt sie schwerer: wirft die
+                # Senke, wuerde HOLD sonst an einem Daemon-Thread haengen
+                # bleiben, den niemand mehr ansieht.
+                strom.close()
+                self._sink.close()
+        except BaseException as error:  # bewusst breit - siehe wait()
+            self._error = error
+            _log.error("Messung mit Fehler beendet: %s", error)
+        finally:
+            # In JEDEM Fall, sonst bliebe die Sitzung fuer immer vergeben und
+            # der naechste Zugriff scheiterte an einer Messung, die es nicht
+            # mehr gibt.
+            self._session.release()
