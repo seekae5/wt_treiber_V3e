@@ -62,7 +62,7 @@ from .wt3000_measure import (
     run_measurement_loop,
     write_metadata,
 )
-from .wt3000_sinks import CsvSink
+from .wt3000_sinks import CsvSink, ExistingFile, RotatingSink, RotationPolicy
 from .wt3000_numeric import ItemTable, NumericItem, NumericValue, read_numeric_values
 from .wt3000_rangeio import RangeAccess, sigma_members_from_units
 from .wt3000_ranging import RangeBackup, RangePlan, RangeReport, applied_ranges
@@ -962,14 +962,39 @@ class MeasureControl:
         error_policy: "ErrorPolicy | None" = None,
         # Optionale zweite Kopfzeile; nicht Default, weil sie das CSV-Format aendert.
         unit_row: bool = False,
+        # Was bei bereits vorhandener Datei geschieht (M4-4).
+        if_exists: ExistingFile = "overwrite",
+        # Gesetzt: die Messreihe wird auf mehrere Dateien verteilt (M4-4).
+        rotation: "RotationPolicy | None" = None,
     ) -> LoopStatistics:
         """Messschleife in eine CSV schreiben - der haeufigste Fall.
 
         Duenne Weiterleitung an 'record()' mit einer fertigen 'CsvSink', damit
         der CSV-Normalfall keinen Umgang mit dem Sink-Vertrag verlangt.
+
+        'if_exists' entscheidet ueber eine bereits vorhandene Datei:
+        'overwrite' (Voreinstellung, protokolliert den Verlust), 'error',
+        'append' (prueft vorher den Spaltenkopf) oder 'unique'.
+
+        'rotation' verteilt die Reihe auf 'messung_0001.csv',
+        'messung_0002.csv', ... Dann ist 'csv_path' der Basisname und bleibt
+        selbst leer.
         """
+        senke: SampleSink
+        if rotation is None:
+            senke = CsvSink(
+                csv_path, delimiter=delimiter, unit_row=unit_row, if_exists=if_exists
+            )
+        else:
+            senke = RotatingSink(
+                lambda pfad: CsvSink(
+                    pfad, delimiter=delimiter, unit_row=unit_row, if_exists=if_exists
+                ),
+                csv_path,
+                rotation,
+            )
         return self.record(
-            CsvSink(csv_path, delimiter=delimiter, unit_row=unit_row),
+            senke,
             table,
             interval_s=interval_s,
             max_samples=max_samples,
