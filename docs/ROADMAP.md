@@ -16,7 +16,7 @@ Diese Datei beschreibt Ziele und Abnahmekriterien. Technische Bedienung steht im
 | Fundament | Transport-Protokoll, Fassade, Konfigurationsauflösung, Geräte-Fake | einheitliche Timeout- und Fehlerstrategie |
 | Gerätekonfiguration | Input, Bereiche, Items, Integration, Berechnung, Harmonics, Backups | Hardwarebelege und Parserkonsolidierung |
 | Messung | blockierend, Generator und steuerbarer Hintergrundlauf | Wiederverbindung und fehlende Zyklen |
-| Export | CSV, JSONL, Callback, MultiSink, Status, Einheiten, Rotation und geprüftes Fortsetzen | feste Metadatenbindung (M4-3) |
+| Export | CSV, JSONL, Callback, MultiSink, Status, Einheiten, Rotation, geprüftes Fortsetzen und über Prüfsummen gebundene Metadaten | — |
 | Auslieferung | installierbares Paket, README, Tests, Ruff, Mypy | CLI, CI, Lizenz und vollständige Metadaten |
 
 ## Meilensteine
@@ -104,10 +104,32 @@ vorhanden.
 |---|---|---|
 | M4-1 | formatunabhängiger Datensatz `Sample` mit Status | erledigt 20.08.2026 |
 | M4-2 | `SampleSink`, CSV, JSONL, Callback und MultiSink | erledigt 20.08.2026 |
-| M4-3 | Einheiten und verbindliche Metadaten | Einheiten erledigt; feste Bindung an Geräte-/Messkontext offen |
+| M4-3 | Einheiten und verbindliche Metadaten | erledigt 25.08.2026 |
 | M4-4 | Rotation und sicheres Fortsetzen | erledigt 25.08.2026 |
 
-M4-3 ist fertig, wenn eine Messdatei ohne Zusatzwissen eindeutig interpretierbar ist.
+M4-3 ist über `RunMetadata` umgesetzt. Vorher gab es die Angaben zu einem Lauf
+**zweimal in halber Form**: die Laufparameter gingen an die Senken (und damit in die
+JSONL), der Gerätezustand in ein optionales Sidecar — und nichts verband eine CSV mit
+ihrem Sidecar.
+
+- [x] **Einmal erheben, an beide Stellen geben.** `RunMetadata.capture()` entsteht
+  einmal je Lauf; `as_sink_metadata()` geht an die Senken, `write_sidecar()` ins
+  Sidecar. Zwei unabhängige Beschreibungen desselben Laufs gibt es nicht mehr.
+- [x] **JSONL ist ohne Sidecar interpretierbar** — Gerät, Verdrahtung, Einheiten,
+  Laufparameter und `run_id` stehen in der Metadatenzeile (`include_device=True`).
+- [x] **Nachweisbare Bindung** für Formate ohne Metadatenplatz (CSV): das Sidecar heißt
+  nach der Datendatei (`messung.csv` → `messung.csv.meta.json`) und nennt jede Datei
+  mit Größe und **SHA-256**. `verify_sidecar()` weist die Zusammengehörigkeit nach und
+  liefert die Metadaten zurück — der übliche Aufruf ist zugleich das Einlesen.
+- [x] **Nach dem Lauf geschrieben**, nicht davor: erst dann stehen Prüfsummen,
+  Rotationsabschnitte und Ergebnis (`samples`, `missing`, `reconnects`) fest.
+
+Der Hash ist der eigentliche Nachweis. Ein gleicher Dateiname beweist nichts — zwei
+Läufe heißen leicht gleich —, und eine Größenprüfung allein ließe eine gleich lange
+Verfälschung durch.
+
+`write_metadata()` bleibt als älterer Weg für die Stufenskripte erhalten; es schreibt
+vor dem Lauf und kann deshalb weder Prüfsummen noch Ergebnis enthalten.
 
 M4-4 ist über `RotatingSink` und `if_exists` umgesetzt:
 
@@ -163,16 +185,14 @@ M0-4/M0-6 -> M2-5 -> weitere Konfigurationsgruppen
 M0-1/M0-2 -> M2-3
 M0-3       -> Geräteabnahme M3-2
 M0-5       -> Ereignisweg M3-3
-M4-3       -> M4-4
 ```
 
 Empfohlene Reihenfolge:
 
 1. M0 als gebündelter Gerätetermin,
 2. M2-5 für eindeutige Parser- und Scope-Regeln,
-3. M4-3/M4-4 für dauerhaft interpretierbare Dateien,
-4. M1-5 für eine durchgängige Fehlersemantik an den Paketgrenzen,
-5. M5 für CLI, CI und Auslieferung.
+3. M1-5 für eine durchgängige Fehlersemantik an den Paketgrenzen,
+4. M5 für CLI, CI und Auslieferung.
 
 ## Bewusst nicht im Kernumfang
 

@@ -79,8 +79,8 @@ tausend Zeichen ohne zusätzliche Information.
 ### S-09 — Auslieferung ist unvollständig
 
 Es fehlen `py.typed`, vollständige Paketmetadaten und Lizenz, Release-Änderungsformat,
-gemeinsame CLI, CI, bewertete Testabdeckung sowie eine feste Bindung zwischen
-Messdatei und Metadaten. Gehört zu M4-3/M5.
+gemeinsame CLI, CI und eine bewertete Testabdeckung. Gehört zu M5. Die feste Bindung
+zwischen Messdatei und Metadaten ist seit M4-3 (25.08.2026) vorhanden.
 
 ### S-10 — Ereignisgesteuertes Lesen fehlt
 
@@ -92,7 +92,6 @@ ersetzen kann. Die Dublettenerkennung bleibt als Absicherung bestehen.
 
 1. H-01 bis H-07 in einem reproduzierbaren Gerätetermin.
 2. S-02, damit neue Konfigurationsgruppen keine weiteren Parservarianten erzeugen.
-3. M4-3 für eine feste Bindung zwischen Messdatei und Metadaten — nach M3-4 und M4-4
-   die letzte inhaltliche Lücke des unbeaufsichtigten Langzeitlaufs.
+3. S-03/S-05 für eine durchgängige Fehlersemantik an den Paketgrenzen.
 4. S-03/S-05 für eine durchgängige Fehlersemantik an den Paketgrenzen.
 5. S-09/M5 für auslieferbares Paket, CLI und CI.

@@ -987,11 +987,61 @@ Die freien Funktionen dieser Datei sind:
 | `write_metadata(path, session, table, parameters)` | Schreibt Geräte- und Laufmetadaten als JSON. |
 | `run_measurement_loop(...)` | Untere, blockierende Messschleife mit driftfreier Taktung. |
 | `iter_samples(...)` | Gemeinsamer Generatorrumpf hinter `record()`, `start()` und `stream()`. |
+| `RunMetadata.capture(session, table, parameters)` | Erhebt Gerät, Einheiten, Spalten und Laufparameter — einmal je Lauf. |
+| `verify_sidecar(data_path, sidecar=None)` | Weist die Zusammengehörigkeit nach und liefert die Metadaten zurück. |
+| `sidecar_path(data_path)` | Abgeleiteter Name: `messung.csv` → `messung.csv.meta.json`. |
 | `missing_values(count)` | Wertliste eines ausgefallenen Zyklus: `count` mal `NO_DATA`. |
 | `verify_after_reconnect(session, table)` | Prüft Zahlenformat, Header und Item-Tabelle nach einem Neuaufbau. |
 
 Normalerweise werden sie über `wt.items.standard_profile()`, `record()` und
 `record_csv()` benutzt.
+
+#### Verbindliche Metadaten: `RunMetadata` und `verify_sidecar()`
+
+Eine Messdatei soll **ohne Zusatzwissen** interpretierbar sein. Vorher gab es die
+Angaben zu einem Lauf zweimal in halber Form — Laufparameter an den Senken,
+Gerätezustand in einem optionalen Sidecar — und nichts verband eine CSV mit ihrem
+Sidecar. `RunMetadata` entsteht jetzt **einmal** je Lauf und geht an beide Stellen.
+
+```python
+wt.measure.record_csv(Path("messung.csv"), table, interval_s=1.0, sidecar=True)
+# schreibt zusätzlich messung.csv.meta.json
+```
+
+Bei **JSONL** braucht es kein Sidecar — dort passt alles in die Metadatenzeile:
+
+```python
+wt.measure.record(JsonlSink(pfad), table, include_device=True)
+```
+
+| Parameter | Wirkung |
+|---|---|
+| `sidecar=True` | Legt `<datei>.meta.json` daneben ab, Name aus der Datendatei abgeleitet. |
+| `metadata_path=...` | Wie `sidecar`, aber mit selbst gewähltem Ablageort. |
+| `include_device` | Gerätesteckbrief (elf Queries) mitnehmen. `None` = automatisch, also genau dann, wenn ein Sidecar entsteht. |
+
+**Die Bindung** ruht auf drei Säulen: einer `run_id` in den Metadaten jeder Senke, dem
+abgeleiteten Dateinamen und — als eigentlichem Nachweis — Größe und **SHA-256** jeder
+Datendatei im Sidecar. Ein gleicher Dateiname beweist nichts; zwei Läufe heißen leicht
+gleich. Eine Größenprüfung allein ließe eine gleich lange Verfälschung durch.
+
+```python
+from wt3000_scpi import verify_sidecar
+
+meta = verify_sidecar(Path("messung.csv"))     # Nachweis und Einlesen in einem
+print(meta["device"]["idn"], meta["units"], meta["result"]["missing"])
+```
+
+Passt etwas nicht — fehlendes Sidecar, fremde Datei, geänderter Inhalt —, endet der
+Aufruf mit `SidecarMismatch` und einer Meldung, die sagt, was abweicht.
+
+Das Sidecar entsteht **nach** dem Lauf. Erst dann stehen Prüfsummen, Rotationsabschnitte
+und Ergebnis fest; es enthält deshalb auch `result` mit `samples`, `missing`,
+`duplicates`, `overruns` und `reconnects`. Bei Rotation beschreibt **ein** Sidecar alle
+Abschnitte, bei einem `MultiSink` alle Formate zugleich.
+
+`write_metadata()` bleibt als älterer Weg erhalten (Stufenskripte); es schreibt vor dem
+Lauf und kann daher weder Prüfsummen noch Ergebnis enthalten.
 
 #### Klasse `ErrorPolicy` — Kommunikationsfehler überleben
 

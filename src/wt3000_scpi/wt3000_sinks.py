@@ -218,6 +218,10 @@ class CsvSink:
         """
         return self._path
 
+    def output_paths(self) -> list[Path]:
+        """Die geschriebenen Dateien - Grundlage der Sidecar-Bindung (M4-3)."""
+        return [self._path]
+
     def open(self, columns: Sequence[str], metadata: Mapping[str, object] | None = None) -> None:
         """Datei anlegen oder fortsetzen und den Spaltenkopf schreiben."""
         self._columns = list(columns)
@@ -375,6 +379,10 @@ class JsonlSink:
         """Die tatsaechlich beschriebene Datei (siehe 'CsvSink.path')."""
         return self._path
 
+    def output_paths(self) -> list[Path]:
+        """Die geschriebenen Dateien - Grundlage der Sidecar-Bindung (M4-3)."""
+        return [self._path]
+
     def open(self, columns: Sequence[str], metadata: Mapping[str, object] | None = None) -> None:
         self._columns = list(columns)
         self._path, anhaengen = _prepare_target(self._path, self._if_exists, "JsonlSink")
@@ -521,6 +529,10 @@ class CallbackSink:
 
     def close(self) -> None:
         return None
+
+    def output_paths(self) -> list[Path]:
+        """Keine - diese Senke schreibt nichts auf die Platte."""
+        return []
 
 
 @dataclass(frozen=True)
@@ -682,6 +694,10 @@ class RotatingSink:
                 _log.warning("Groesse von %s nicht lesbar: %s", aktuell, error)
         return False
 
+    def output_paths(self) -> list[Path]:
+        """Alle Abschnitte - ein Sidecar beschreibt die ganze Messreihe (M4-3)."""
+        return list(self.segments)
+
     def close(self) -> None:
         """Den laufenden Abschnitt schliessen. Mehrfachaufruf ist unschaedlich."""
         if self._sink is not None:
@@ -735,6 +751,15 @@ class MultiSink:
     def write(self, sample: Sample) -> None:
         for sink in self._sinks:
             sink.write(sample)
+
+    def output_paths(self) -> list[Path]:
+        """Die Dateien aller gebuendelten Senken, in ihrer Reihenfolge."""
+        pfade: list[Path] = []
+        for sink in self._sinks:
+            methode = getattr(sink, "output_paths", None)
+            if callable(methode):
+                pfade.extend(methode())
+        return pfade
 
     def close(self) -> None:
         erster: BaseException | None = None

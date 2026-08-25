@@ -62,16 +62,21 @@ from .wt3000_input import (
 )
 # Messdatensatz, Messsteuerung und Profilfunktionen.
 from .wt3000_measure import (
+    SIDECAR_VERSION,
     ErrorPolicy,
     LoopStatistics,
     Measurement,
     MeasurementAborted,
+    RunMetadata,
+    SidecarMismatch,
     Sample,
     SampleMark,
     SampleSink,
     build_harmonics_profile,
     build_integration_profile,
     build_standard_profile,
+    sidecar_path,
+    verify_sidecar,
 )
 from .wt3000_numeric import NumericValue, ValueStatus
 from .wt3000_rangeio import ChangesNotAllowed, Quantity
@@ -157,6 +162,12 @@ __all__ = [
     # Fehlerstrategie bei Kommunikationsabbruechen
     "ErrorPolicy",
     "MeasurementAborted",
+    # Verbindliche Metadaten (M4-3)
+    "RunMetadata",
+    "SidecarMismatch",
+    "verify_sidecar",
+    "sidecar_path",
+    "SIDECAR_VERSION",
     # Datensatz
     "Sample",
     "SampleMark",

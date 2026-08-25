@@ -49,6 +49,7 @@ from .wt3000_itemspec import (
 )
 from .wt3000_measure import (
     ErrorPolicy,
+    RunMetadata,
     LoopStatistics,
     Measurement,
     NumericHold,
@@ -58,9 +59,10 @@ from .wt3000_measure import (
     build_integration_profile,
     build_standard_profile,
     iter_samples,
+    output_paths_of,
     prepare_update_rate,
     run_measurement_loop,
-    write_metadata,
+    sidecar_path,
 )
 from .wt3000_sinks import CsvSink, ExistingFile, RotatingSink, RotationPolicy
 from .wt3000_numeric import ItemTable, NumericItem, NumericValue, read_numeric_values
@@ -743,6 +745,11 @@ class MeasureControl:
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
         error_policy: "ErrorPolicy | None" = None,
+        # Metadaten neben die Datendatei legen, Name abgeleitet (M4-3).
+        sidecar: bool = False,
+        # Geraetesteckbrief in die Metadaten aufnehmen. None = automatisch,
+        # also genau dann, wenn ein Sidecar entsteht.
+        include_device: bool | None = None,
     ) -> LoopStatistics:
         """Messschleife in eine beliebige Senke schreiben.
 
@@ -773,21 +780,25 @@ class MeasureControl:
             _log.warning("Nur-Lesen-Sitzung: Messschleife laeuft ohne HOLD")
             use_hold = False
 
-        # Dieselben Angaben gehen an den Sidecar UND an die Senke: ein Format
-        # wie JSONL legt sie mit in die Datei, die CSV laesst sie liegen.
-        lauf_parameter: dict[str, object] = {
-            "sample_interval_s": interval_s,
-            "max_samples": max_samples,
-            "max_duration_s": max_duration_s,
-            "use_hold": use_hold,
-            "record_condition": record_condition,
-            **(parameters or {}),
-        }
+        lauf_parameter = self._run_parameters(
+            interval_s, max_samples, max_duration_s, use_hold, record_condition, parameters
+        )
+        # EINMAL erheben, dann an beide Stellen: die Senken bekommen sie ueber
+        # 'metadata', das Sidecar aus demselben Gegenstand. Vorher entstanden
+        # zwei unabhaengige, je halbe Beschreibungen desselben Laufs.
+        # 'None' heisst: erheben, wenn ein Sidecar entsteht - elf zusaetzliche
+        # Queries je Lauf sollen nicht ungefragt anfallen. Wer eine JSONL
+        # ohne Sidecar vollstaendig haben will, setzt es ausdruecklich.
+        mit_geraet = (
+            include_device
+            if include_device is not None
+            else (sidecar or metadata_path is not None)
+        )
+        run = RunMetadata.capture(
+            self._session, table, lauf_parameter, include_device=mit_geraet
+        )
 
-        if metadata_path is not None:
-            write_metadata(metadata_path, self._session, table, parameters=lauf_parameter)
-
-        return run_measurement_loop(
+        stats = run_measurement_loop(
             session=self._session,
             table=table,
             sink=sink,
@@ -797,11 +808,74 @@ class MeasureControl:
             use_hold=use_hold,
             record_condition=record_condition,
             log_every=log_every,
-            metadata=lauf_parameter,
+            metadata=run.as_sink_metadata(),
             check_update_rate=check_update_rate,
             mark_duplicates=mark_duplicates,
             error_policy=error_policy,
         )
+
+        # NACH dem Lauf: erst jetzt stehen Pruefsummen, Abschnitte und
+        # Ergebnis fest. Das ist der Unterschied zum frueheren Sidecar, das
+        # vorher geschrieben wurde und den Ausgang nicht kennen konnte.
+        self._write_sidecar(run, sink, stats, metadata_path, sidecar)
+        return stats
+
+    @staticmethod
+    def _run_parameters(
+        interval_s: float,
+        max_samples: int | None,
+        max_duration_s: float | None,
+        use_hold: bool,
+        record_condition: bool,
+        parameters: dict | None,
+    ) -> dict[str, object]:
+        """Die Laufparameter, die in Senken und Sidecar gleichlautend stehen."""
+        return {
+            "sample_interval_s": interval_s,
+            "max_samples": max_samples,
+            "max_duration_s": max_duration_s,
+            "use_hold": use_hold,
+            "record_condition": record_condition,
+            **(parameters or {}),
+        }
+
+    @staticmethod
+    def _write_sidecar(
+        run: RunMetadata,
+        sink: SampleSink,
+        stats: LoopStatistics,
+        metadata_path: Path | None,
+        sidecar: bool,
+    ) -> None:
+        """Das Sidecar ablegen, wenn eines verlangt ist.
+
+        Der Ablageort wird bei 'sidecar=True' aus der ersten Datendatei
+        ABGELEITET ('messung.csv' -> 'messung.csv.meta.json'). Ein
+        ausdruecklicher 'metadata_path' geht vor.
+
+        Das Sidecar beschreibt ALLE Dateien der Senke - bei Rotation also
+        jeden Abschnitt, bei einem MultiSink CSV und JSONL zugleich.
+        """
+        dateien = output_paths_of(sink)
+        if metadata_path is not None:
+            ziel = metadata_path
+        elif sidecar:
+            if not dateien:
+                _log.warning(
+                    "sidecar=True, aber die Senke schreibt keine Datei - "
+                    "es wird kein Sidecar angelegt"
+                )
+                return
+            ziel = sidecar_path(dateien[0])
+        else:
+            return
+
+        try:
+            run.write_sidecar(ziel, dateien, stats)
+        except OSError as error:
+            # Ein misslungenes Sidecar darf eine gelungene Messreihe nicht
+            # nachtraeglich zum Fehlschlag machen - die Daten liegen bereits.
+            _log.error("Sidecar %s konnte nicht geschrieben werden: %s", ziel, error)
 
     # -- Steuerbare Messung -------------------------------------------------
 
@@ -820,6 +894,11 @@ class MeasureControl:
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
         error_policy: "ErrorPolicy | None" = None,
+        # Metadaten neben die Datendatei legen, Name abgeleitet (M4-3).
+        sidecar: bool = False,
+        # Geraetesteckbrief in die Metadaten aufnehmen. None = automatisch,
+        # also genau dann, wenn ein Sidecar entsteht.
+        include_device: bool | None = None,
     ) -> Measurement:
         """Eine Messung im Hintergrund starten und sofort zurueckkehren.
 
@@ -849,19 +928,24 @@ class MeasureControl:
             _log.warning("Nur-Lesen-Sitzung: Messung laeuft ohne HOLD")
             use_hold = False
 
-        lauf_parameter: dict[str, object] = {
-            "sample_interval_s": interval_s,
-            "max_samples": max_samples,
-            "max_duration_s": max_duration_s,
-            "use_hold": use_hold,
-            "record_condition": record_condition,
-            **(parameters or {}),
-        }
+        lauf_parameter = self._run_parameters(
+            interval_s, max_samples, max_duration_s, use_hold, record_condition, parameters
+        )
 
-        # Vor dem Start und damit im Haupt-Thread: danach gehoert die Sitzung
-        # dem Mess-Thread, und dieser Abzug ist ein Geraetezugriff.
-        if metadata_path is not None:
-            write_metadata(metadata_path, self._session, table, parameters=lauf_parameter)
+        # VOR dem Start und damit im Haupt-Thread: danach gehoert die Sitzung
+        # dem Mess-Thread, und die Geraeteabfragen des Steckbriefs liefen in
+        # eine ConcurrentAccessError.
+        # 'None' heisst: erheben, wenn ein Sidecar entsteht - elf zusaetzliche
+        # Queries je Lauf sollen nicht ungefragt anfallen. Wer eine JSONL
+        # ohne Sidecar vollstaendig haben will, setzt es ausdruecklich.
+        mit_geraet = (
+            include_device
+            if include_device is not None
+            else (sidecar or metadata_path is not None)
+        )
+        run = RunMetadata.capture(
+            self._session, table, lauf_parameter, include_device=mit_geraet
+        )
 
         messung = Measurement(
             session=self._session,
@@ -873,10 +957,15 @@ class MeasureControl:
             use_hold=use_hold,
             record_condition=record_condition,
             log_every=log_every,
-            metadata=lauf_parameter,
+            metadata=run.as_sink_metadata(),
             check_update_rate=check_update_rate,
             mark_duplicates=mark_duplicates,
             error_policy=error_policy,
+            # Das Sidecar entsteht im Mess-Thread, nachdem die Senke
+            # geschlossen ist - erst dann stimmen die Pruefsummen.
+            run_metadata=run if mit_geraet else None,
+            sidecar_target=metadata_path,
+            write_sidecar=sidecar or metadata_path is not None,
         ).start()
         self._active = messung
         return messung
@@ -966,6 +1055,11 @@ class MeasureControl:
         if_exists: ExistingFile = "overwrite",
         # Gesetzt: die Messreihe wird auf mehrere Dateien verteilt (M4-4).
         rotation: "RotationPolicy | None" = None,
+        # Metadaten neben die Datendatei legen, Name abgeleitet (M4-3).
+        sidecar: bool = False,
+        # Geraetesteckbrief in die Metadaten aufnehmen. None = automatisch,
+        # also genau dann, wenn ein Sidecar entsteht.
+        include_device: bool | None = None,
     ) -> LoopStatistics:
         """Messschleife in eine CSV schreiben - der haeufigste Fall.
 
@@ -979,6 +1073,11 @@ class MeasureControl:
         'rotation' verteilt die Reihe auf 'messung_0001.csv',
         'messung_0002.csv', ... Dann ist 'csv_path' der Basisname und bleibt
         selbst leer.
+
+        'sidecar=True' legt die Metadaten daneben ab
+        ('messung.csv' -> 'messung.csv.meta.json') und bindet sie ueber
+        Pruefsummen an die Datendatei. Erst damit ist eine CSV ohne
+        Zusatzwissen interpretierbar - siehe 'verify_sidecar()'.
         """
         senke: SampleSink
         if rotation is None:
@@ -1007,6 +1106,8 @@ class MeasureControl:
             check_update_rate=check_update_rate,
             mark_duplicates=mark_duplicates,
             error_policy=error_policy,
+            sidecar=sidecar,
+            include_device=include_device,
         )
 
 

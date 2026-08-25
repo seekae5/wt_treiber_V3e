@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 # Fuer den NaN eines ausgefallenen Zyklus, siehe missing_values().
@@ -11,6 +12,7 @@ import statistics
 # Hintergrundlauf und Stoppsignal gehoeren zur Messschleife, nicht zur Fassade.
 import threading
 import time
+import uuid
 from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -447,6 +449,278 @@ class SampleSink(Protocol):
 # ---------------------------------------------------------------------------
 
 
+#: Aufbau der Sidecar-Datei. Wird mitgeschrieben, damit ein spaeterer Leser
+#: eine aeltere Fassung erkennen kann, statt an einem fehlenden Feld zu raten.
+SIDECAR_VERSION = 1
+
+#: Abfragen, die den Geraetezustand fuer die Metadaten erheben. Reine Queries.
+_METADATA_QUERIES: dict[str, str] = {
+    "idn": "*IDN?",
+    "communicate": ":COMMunicate?",
+    "rate": ":RATE?",
+    "numeric_format": ":NUMeric:FORMat?",
+    "input": ":INPut?",
+    "input_wiring": ":INPut:WIRing?",
+    "input_module": ":INPut:MODUle?",
+    "input_scaling": ":INPut:SCALing?",
+    "input_filter": ":INPut:FILTer?",
+    "input_cfactor": ":INPut:CFACtor?",
+    "measure": ":MEASure?",
+}
+
+
+def read_device_context(session: WTSession) -> dict[str, str]:
+    """Geraetezustand fuer die Metadaten erheben - ausschliesslich Queries.
+
+    Ein fehlgeschlagener Query wird als Text im betroffenen Feld vermerkt und
+    nicht verschwiegen; danach wird nachgeraeumt, damit eine verspaetete
+    Antwort nicht im naechsten Feld landet.
+    """
+    device: dict[str, str] = {}
+    for key, command in _METADATA_QUERIES.items():
+        try:
+            device[key] = session.query(command)
+        except WTError as error:
+            device[key] = f"<Fehler: {error}>"
+            session.drain_after_failure()
+    return device
+
+
+def file_digest(path: Path) -> str:
+    """SHA-256 einer Datei als Hexziffern."""
+    hasher = hashlib.sha256()
+    with path.open("rb") as datei:
+        for block in iter(lambda: datei.read(65536), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
+def sidecar_path(data_path: Path) -> Path:
+    """Standardname der Metadatendatei: 'messung.csv' -> 'messung.meta.json'.
+
+    Aus dem Datennamen ABGELEITET und nicht frei gewaehlt - das ist die halbe
+    Bindung: wer die Datendatei hat, findet die Metadaten, ohne sie zu suchen.
+    Die andere Haelfte ist der Inhalt, siehe 'verify_sidecar()'.
+    """
+    return data_path.with_suffix(data_path.suffix + ".meta.json")
+
+
+def output_paths_of(sink: object) -> list[Path]:
+    """Die Dateien einer Senke einsammeln, auch aus Buendeln und Rotation.
+
+    Ueber 'getattr' und nicht ueber isinstance: eine selbstgeschriebene Senke,
+    die 'output_paths()' anbietet, wird damit ohne Aenderung hier erfasst.
+    Senken ohne Dateien (CallbackSink) liefern eine leere Liste.
+    """
+    methode = getattr(sink, "output_paths", None)
+    if callable(methode):
+        pfade = methode()
+        return [Path(p) for p in pfade]
+    return []
+
+
+@dataclass(frozen=True)
+class RunMetadata:
+    """Alles, was eine Messdatei ohne Zusatzwissen interpretierbar macht (M4-3).
+
+    Bis hierher gab es diese Angaben zweimal in halber Form: die Laufparameter
+    gingen an die Senken (und damit in die JSONL), der Geraetezustand in eine
+    optionale Sidecar-Datei. Keines von beidem war vollstaendig, und nichts
+    verband die CSV mit ihrem Sidecar - wer beide Dateien hatte, konnte nicht
+    feststellen, ob sie zusammengehoeren.
+
+    'RunMetadata' entsteht EINMAL je Lauf und geht an beide Stellen. Die
+    Bindung ruht dabei auf drei Saeulen:
+
+      1. 'run_id' - eine Kennung, die in den Metadaten JEDER Senke steht und
+         damit in der JSONL-Kopfzeile und im Sidecar auftaucht.
+      2. Der abgeleitete Dateiname ('messung.csv' -> 'messung.meta.json').
+      3. Der Inhalt: das Sidecar nennt jede Datendatei mit Groesse und
+         SHA-256. Damit laesst sich nachweisen, dass ein Sidecar zu genau
+         DIESER Datei gehoert - und nebenbei, dass die Datei vollstaendig ist.
+
+    Der Geraetezustand wird beim Anlegen erhoben, das Sidecar dagegen erst zum
+    Schluss geschrieben: erst dann stehen Pruefsummen und Ergebnis fest.
+    """
+
+    run_id: str
+    recorded_at: str
+    columns: list[str]
+    units: dict[str, "str | None"]
+    device: dict[str, str]
+    item_table: dict
+    parameters: dict
+
+    @classmethod
+    def capture(
+        cls,
+        session: WTSession,
+        table: ItemTable,
+        parameters: Mapping[str, object] | None = None,
+        include_device: bool = True,
+    ) -> "RunMetadata":
+        """Den Zustand VOR dem Lauf erheben.
+
+        'include_device=False' laesst die elf Geraeteabfragen weg - fuer den
+        Fall, dass die Sitzung schon einem Mess-Thread gehoert oder ein
+        schneller Start wichtiger ist als der volle Steckbrief.
+        """
+        return cls(
+            run_id=uuid.uuid4().hex[:16],
+            recorded_at=datetime.now(timezone.utc).astimezone().isoformat(),
+            columns=[item.key for item in table.items],
+            units=table.unit_map(),
+            device=read_device_context(session) if include_device else {},
+            item_table=table.to_dict(),
+            parameters=dict(parameters or {}),
+        )
+
+    def as_sink_metadata(self) -> dict[str, object]:
+        """Die Form, die an die Senken geht.
+
+        Bewusst FLACH und mit den Laufparametern auf oberster Ebene: die
+        bisherigen Schluessel ('sample_interval_s', 'update_rate_s', 'units')
+        bleiben dort, wo Senken und Auswertungen sie erwarten. Neu kommen
+        'run_id' und der Geraeteblock dazu - eine JSONL ist damit ohne
+        Sidecar vollstaendig.
+        """
+        daten: dict[str, object] = dict(self.parameters)
+        daten["run_id"] = self.run_id
+        daten["recorded_at"] = self.recorded_at
+        daten["units"] = self.units
+        if self.device:
+            daten["device"] = self.device
+        return daten
+
+    def as_dict(self, data_files: Sequence[Mapping[str, object]] = ()) -> dict[str, object]:
+        """Die Form, die ins Sidecar geht - vollstaendig, verschachtelt."""
+        return {
+            "sidecar_version": SIDECAR_VERSION,
+            "run_id": self.run_id,
+            "recorded_at": self.recorded_at,
+            "parameters": self.parameters,
+            "device": self.device,
+            "item_table": self.item_table,
+            "columns": self.columns,
+            "units": self.units,
+            "data_files": list(data_files),
+        }
+
+    def write_sidecar(
+        self,
+        path: Path,
+        data_paths: Sequence[Path] = (),
+        stats: "LoopStatistics | None" = None,
+    ) -> Path:
+        """Das Sidecar schreiben - nach dem Lauf, mit Pruefsummen und Ergebnis.
+
+        Eine Datendatei, die nicht (mehr) existiert, wird mit 'missing: true'
+        vermerkt statt uebergangen: dass sie fehlt, ist selbst eine Aussage.
+        """
+        dateien: list[dict[str, object]] = []
+        for datei in data_paths:
+            if not datei.exists():
+                dateien.append({"name": datei.name, "missing": True})
+                continue
+            dateien.append(
+                {
+                    "name": datei.name,
+                    "bytes": datei.stat().st_size,
+                    "sha256": file_digest(datei),
+                }
+            )
+
+        payload = self.as_dict(dateien)
+        if stats is not None:
+            payload["result"] = {
+                "samples": stats.samples,
+                "measured_samples": stats.measured_samples,
+                "duplicates": stats.duplicates,
+                "missing": stats.missing,
+                "overruns": stats.overruns,
+                "reconnects": stats.reconnects,
+                "update_rate_s": stats.update_rate_s,
+            }
+        path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        _log.info("Metadaten gesichert nach %s (run_id %s)", path, self.run_id)
+        return path
+
+
+class SidecarMismatch(WTError):
+    """Sidecar und Datendatei gehoeren nicht zusammen oder passen nicht mehr.
+
+    Getrennt von 'AppendMismatch': dort geht es um zwei Laeufe in einer Datei,
+    hier um die Zuordnung zwischen Daten und ihrer Beschreibung.
+    """
+
+
+def verify_sidecar(data_path: Path, sidecar: Path | None = None) -> dict[str, object]:
+    """Nachweisen, dass ein Sidecar zu dieser Datendatei gehoert (M4-3).
+
+    Prueft in dieser Reihenfolge und bricht bei der ersten Abweichung ab:
+
+      1. Das Sidecar existiert und ist lesbares JSON dieses Formats.
+      2. Die Datei ist darin ueberhaupt genannt.
+      3. Groesse und SHA-256 stimmen ueberein.
+
+    Der Hash ist der eigentliche Nachweis. Ein gleicher Dateiname beweist
+    nichts - zwei Laeufe heissen leicht gleich; ein gleicher Hash schliesst
+    auch aus, dass die Datei seither abgeschnitten oder veraendert wurde.
+
+    Liefert die Metadaten zurueck, wenn alles stimmt - so ist der uebliche
+    Aufruf zugleich das Einlesen:
+
+        meta = verify_sidecar(Path("messung.csv"))
+        print(meta["device"]["idn"], meta["units"])
+    """
+    pfad = sidecar if sidecar is not None else sidecar_path(data_path)
+    if not pfad.exists():
+        raise SidecarMismatch(
+            f"Zu {data_path.name} gibt es kein Sidecar ({pfad.name} fehlt). Ohne "
+            "Metadaten ist die Datei nur mit Zusatzwissen interpretierbar."
+        )
+    try:
+        daten = json.loads(pfad.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SidecarMismatch(f"{pfad.name} ist kein lesbares JSON: {error}") from error
+    if not isinstance(daten, dict) or "sidecar_version" not in daten:
+        raise SidecarMismatch(
+            f"{pfad.name} ist kein Sidecar dieses Treibers (Feld 'sidecar_version' fehlt)."
+        )
+
+    eintraege = daten.get("data_files")
+    if not isinstance(eintraege, list):
+        raise SidecarMismatch(f"{pfad.name} nennt keine Datendateien ('data_files' fehlt).")
+
+    passend = [e for e in eintraege if isinstance(e, dict) and e.get("name") == data_path.name]
+    if not passend:
+        genannt = [e.get("name") for e in eintraege if isinstance(e, dict)]
+        raise SidecarMismatch(
+            f"{pfad.name} beschreibt {data_path.name} nicht - genannt sind {genannt}. "
+            "Die beiden Dateien gehoeren nicht zusammen."
+        )
+
+    eintrag = passend[0]
+    if not data_path.exists():
+        raise SidecarMismatch(f"{data_path} existiert nicht")
+
+    groesse = data_path.stat().st_size
+    if eintrag.get("bytes") != groesse:
+        raise SidecarMismatch(
+            f"{data_path.name} misst {groesse} Bytes, das Sidecar nennt "
+            f"{eintrag.get('bytes')}. Die Datei wurde seit dem Lauf veraendert oder "
+            "abgeschnitten."
+        )
+    tatsaechlich = file_digest(data_path)
+    if eintrag.get("sha256") != tatsaechlich:
+        raise SidecarMismatch(
+            f"{data_path.name} hat die Pruefsumme {tatsaechlich[:16]}..., das Sidecar "
+            f"nennt {str(eintrag.get('sha256'))[:16]}.... Der Inhalt stimmt nicht mit "
+            "dem beschriebenen Lauf ueberein."
+        )
+    return daten
+
+
 def write_metadata(
     path: Path,
     session: WTSession,
@@ -454,6 +728,16 @@ def write_metadata(
     parameters: dict,
 ) -> None:
     """Geraetezustand und Laufparameter neben der CSV ablegen.
+
+    AELTERER WEG, erhalten fuer die Stufenskripte und bestehende Aufrufer. Er
+    schreibt VOR dem Lauf und kann deshalb weder Pruefsummen noch das Ergebnis
+    enthalten - es entsteht eine Beschreibung ohne nachweisbare Bindung an die
+    Datendatei.
+
+    Fuer neue Aufrufe ist 'RunMetadata' der vollstaendige Weg: dieselben
+    Angaben, aber einmal erhoben, an Senke UND Sidecar gereicht und ueber
+    SHA-256 an die Datendatei gebunden. Ueber die Fassade genuegt
+    'record(..., sidecar=True)'.
 
     Ohne diese Angaben ist eine Messreihe spaeter nicht mehr interpretierbar -
     insbesondere Bereiche und Skalierung (z.B. CT = 2000 auf Element 4).
@@ -1165,6 +1449,11 @@ class Measurement:
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
         error_policy: "ErrorPolicy | None" = None,
+        # Metadaten des Laufs; wird nach dem Schliessen der Senke als Sidecar
+        # abgelegt, wenn 'write_sidecar' gilt (M4-3).
+        run_metadata: "RunMetadata | None" = None,
+        sidecar_target: Path | None = None,
+        write_sidecar: bool = False,
     ) -> None:
         self._session = session
         self._table = table
@@ -1179,6 +1468,9 @@ class Measurement:
         self._check_update_rate = check_update_rate
         self._mark_duplicates = mark_duplicates
         self._error_policy = error_policy
+        self._run_metadata = run_metadata
+        self._sidecar_target = sidecar_target
+        self._write_sidecar = write_sidecar
 
         self._stats = LoopStatistics()
         self._thread: threading.Thread | None = None
@@ -1331,6 +1623,32 @@ class Measurement:
 
     # -- Der Thread ---------------------------------------------------------
 
+    def _sidecar_ablegen(self) -> None:
+        """Metadaten neben die Datendatei legen (M4-3).
+
+        Laeuft im Mess-Thread, direkt nach dem Schliessen der Senke - dieselbe
+        Regel wie beim uebrigen Aufraeumen: wer 'wait()' vergisst, verliert
+        hoechstens die Statistik, nie das Sidecar.
+
+        Fehler werden protokolliert und nicht ausgeloest: die Messdaten liegen
+        bereits, und ein misslungenes Sidecar darf eine gelungene Messreihe
+        nicht nachtraeglich zum Fehlschlag machen.
+        """
+        if not self._write_sidecar or self._run_metadata is None:
+            return
+        dateien = output_paths_of(self._sink)
+        if self._sidecar_target is not None:
+            ziel = self._sidecar_target
+        elif dateien:
+            ziel = sidecar_path(dateien[0])
+        else:
+            _log.warning("Kein Sidecar: die Senke schreibt keine Datei")
+            return
+        try:
+            self._run_metadata.write_sidecar(ziel, dateien, self._stats)
+        except OSError as error:
+            _log.error("Sidecar %s konnte nicht geschrieben werden: %s", ziel, error)
+
     def _run(self) -> None:
         """Mess-Thread; oeffnet und schliesst seine Senke selbst."""
         self._go.wait()
@@ -1371,6 +1689,9 @@ class Measurement:
                 # bleiben, den niemand mehr ansieht.
                 strom.close()
                 self._sink.close()
+                # NACH close(): erst jetzt ist die Datei vollstaendig und
+                # ihre Pruefsumme gueltig.
+                self._sidecar_ablegen()
         except BaseException as error:  # bewusst breit - siehe wait()
             self._error = error
             _log.error("Messung mit Fehler beendet: %s", error)

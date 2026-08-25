@@ -27,7 +27,7 @@ einem echten Verbindungsabriss sind gerätefrei geprüft, aber nicht belegt.
 | Geräterate | Lesen, Setzen und Plausibilisierung gegen Python-Takt | ereignisgesteuertes Warten |
 | Item-Tabelle | Profile, Apply/Restore, Tail-Sicherung | Spezialprofile nur bei Bedarf |
 | Messung | `record()`, `start()`/`stop()`/`wait()` und `stream()` mit gemeinsamem Kern; `ErrorPolicy` mit `MISSING`-Zyklen, Fehlergrenzen und geprüfter Wiederverbindung | ereignisgesteuertes Warten auf einen neuen Datensatz (hängt an M0-5) |
-| Datenexport | CSV, JSONL, Callback, MultiSink; Status, Rate, bekannte Einheiten, sichtbare Lücken (`mark=MISSING` bei voller Spaltenzahl), Rotation nach Zeilen/Größe/Zeit und geprüftes Fortsetzen | feste Bindung zwischen Messdatei und Metadaten |
+| Datenexport | CSV, JSONL, Callback, MultiSink; Status, Rate, Einheiten, sichtbare Lücken (`mark=MISSING`), Rotation, geprüftes Fortsetzen und ein über SHA-256 an die Datendatei gebundenes Sidecar | — |
 | Integration | Konfiguration, Start/Stop/Reset, Profil und Zustandsüberwachung | kompletter Lauf am realen Gerät |
 | Rechenfunktionen | Averaging, Frequenzquelle, Effizienz, SQ-Formel, Synchronisation | weitere Spezialgruppen nur bei Bedarf |
 | Harmonics | Konfiguration und Messprofil mit Optionsprüfung | Geräteabnahme; Einheiten einzelner Faktoren |
@@ -39,9 +39,8 @@ einem echten Verbindungsabriss sind gerätefrei geprüft, aber nicht belegt.
 |---|---|---|
 | 1 | Hardwarefragen gebündelt prüfen (M0) | entfernt verbliebene Syntax- und Firmwareannahmen; einziger Punkt mit Vorlauf |
 | 2 | Parser und Scope-Regeln zusammenführen (M2-5) | verhindert widersprüchliche Antworten und weitere Duplikate |
-| 3 | Feste Metadatenbindung (M4-3) | macht eine Messdatei ohne Zusatzwissen eindeutig |
-| 4 | Allgemeine Fehlersemantik (M1-5/S-03, S-05) | `WTError` an allen Paketgrenzen statt vereinzelter `KeyError` |
-| 5 | CLI, CI und Paketmetadaten (M5) | macht die Bibliothek reproduzierbar auslieferbar |
+| 3 | Allgemeine Fehlersemantik (M1-5/S-03, S-05) | `WTError` an allen Paketgrenzen statt vereinzelter `KeyError` |
+| 4 | CLI, CI und Paketmetadaten (M5) | macht die Bibliothek reproduzierbar auslieferbar |
 
 Die Fehlerstrategie für Kommunikationsabbrüche (früher Rang 1) ist umgesetzt: eine
 `ErrorPolicy` macht aus einem ausgefallenen Zyklus einen Datensatz mit
