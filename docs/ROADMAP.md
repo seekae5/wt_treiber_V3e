@@ -1,577 +1,154 @@
 # Roadmap — vom Stufenskript zur Treiberbibliothek
 
-**Stand:** 2026-08-25, `wt3000-scpi 0.3.0`
+**Stand:** 25. August 2026 · `wt3000-scpi 0.3.0`
+**Qualität:** gerätefreie Tests, Ruff und Mypy ohne Befund; Hardwareabnahmen sind
+gesondert markiert.
 
-**Abgeschlossen:** M1-1, M1-2, M1-4, M3-1, M3-3, M4-1, M4-2, M4-3 sowie die
-Befundpakete P-1…P-8
+Diese Datei beschreibt Ziele und Abnahmekriterien. Technische Bedienung steht im
+[Anwendungshandbuch](ANWENDUNGSHANDBUCH.md), konkrete Restbefunde in
+[OFFENE_PUNKTE.md](OFFENE_PUNKTE.md), abgeschlossene Änderungen im
+[Änderungsprotokoll](AENDERUNGEN_2026-08-18.md).
 
-**Prüfstand:** 758 Tests, Abdeckung 90 %, Ruff und Mypy ohne Befund
+## Reifegrad
 
-**Bezug:** [OFFENE_PUNKTE.md](OFFENE_PUNKTE.md) ·
-[AENDERUNGEN_2026-08-18.md](AENDERUNGEN_2026-08-18.md)
-
-Der fertige Treiber soll fünf Aufgaben abdecken:
-
-1. Gerätekonfiguration einlesen
-2. Gerätekonfiguration sicher einstellen und wiederherstellen
-3. Messkonfiguration lesen und anpassen
-4. Messungen starten, stoppen und nach Unterbrechungen fortsetzen
-5. Messdaten samt Einheiten und Metadaten exportieren
-
-SCPI-Knoten, die noch nicht am Gerät belegt sind, bleiben mit **(prüfen)** markiert.
-Die Kommandoübersicht ist eine Geräte- und keine Implementierungsübersicht.
-
----
-
-## 1 — Aktueller Reifegrad
-
-| Zielfunktion | Vorhanden | Offen | Reifegrad |
-|---|---|---|---|
-| Gerätekonfiguration lesen | `DeviceInfo` liest Identifikation, Verdrahtung, Modultypen und Bestückung, auffrischbar über `refresh_device()`; Metadatenabzug liest weitere Gruppen roh | strukturierter Snapshot für Kommunikation, Averaging, Frequenzquelle, Integration, Harmonische und System | **30 %** |
-| Gerätekonfiguration einstellen | sichere Schreib- und Restoremuster für Item-Tabelle, Bereiche und Eingangskonfiguration | Gerätegruppen jenseits `:INPut`, ein gemeinsames Backup, Setup-Speicher | **15 %** |
-| Messkonfiguration | `InputConfig`, `RangePlan`, Snapshots, Diff und Restore | geräteabhängige Element-/Bereichstabellen, `InputPlan`, Eingangsart und unabhängiger Modus setzen | **75 %** |
-| Messsteuerung | blockierende Messschleife, HOLD, driftfreie Taktung, Taktkopplung und Dublettenerkennung, Statistik, `Sample`; **start-/stoppbares `Measurement`, Generator `stream()`, Sitzungsbesitz (M3-1)** | Ereignistakt (hängt an M0-5), Wiederverbindung (M3-4) | **70 %** |
-| Datenexport | `SampleSink`, CSV, JSONL, Callback und Bündel; strenge Spaltenregel; Einheiten an den Daten | verbindliche Metadaten, Rotation und Fortsetzung | **85 %** |
-| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 758 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
-
-Die Fassade und der austauschbare Export sind nicht mehr Zielbild, sondern Bestand.
-Der Schwerpunkt liegt jetzt auf Hardwarebelegen, vollständiger Konfiguration und einer
-steuerbaren Langzeitmessung.
-
----
-
-## 2 — Status der Meilensteine
-
-| Meilenstein | Status | Nächster Abschluss |
+| Bereich | Vorhanden | Wesentliche Lücke |
 |---|---|---|
-| M0 — Gerätefragen | **teilweise** | ein protokollierter Gerätetermin; Spannungssyntax ist bereits belegt |
-| M1 — Fundament | **teilweise** | M1-3 weitgehend und M1-4 umgesetzt; offen: Bereichstabellen nach Modultyp und M1-5 |
-| M2 — Konfiguration | **teilweise** | M2-1 zur Hälfte und M2-4 umgesetzt; offen: M2-2, M2-3, M2-5 |
-| M3 — Messsteuerung | **teilweise** | M3-1 steuerbares Objekt, M3-2 Integration und M3-3 Ersatzweg umgesetzt; offen: M3-4 (Verbindungsabbruch überleben) |
-| M4 — Export | **teilweise** | M4-3 Einheiten umgesetzt; offen: verbindliche Metadaten und M4-4 |
-| M5 — Auslieferung | **teilweise** | CLI, Paketmetadaten und CI |
-
----
-
-## M0 — Offene Gerätefragen schließen
-
-Die offenen Prüfungen sollten als ein Messtermin durchgeführt werden. Jeder Beleg
-enthält Modell, Firmware, gesendetes Kommando, Rohantwort, Rücklesewert und
-Fehlerqueue.
-
-### M0-1 — Bereichssyntax abschließen `S · am Gerät` — **teilweise umgesetzt**
-
-Belegt ist der Spannungsknoten ohne Einheit:
-`:INPut:VOLTage:RANGe:ELEMent4 1000`.
-
-Noch zu prüfen:
-
-- Direktstrom: reine NRf-Zahl gegen `5A`/`500MA`
-- Sensorstrom: `EXTernal,10` gegen `EXTernal,10V`
-- Rücklesen und Fehlerqueue nach jeder Form
-
-**Fertig, wenn:** Spannung, Direktstrom und Sensorstrom mit genau einer gemeinsamen
-Formatierungsregel geschrieben und durch echte Geräteantworten in Tests belegt sind.
-
-### M0-2 — Verhalten bei ungültigen Stellwerten `S · am Gerät`
-
-Einen Wert zwischen zwei gültigen Stufen senden und unterscheiden: Ablehnung,
-Rundung oder unveränderte Übernahme. Das Ergebnis bestimmt den Standard von
-`verify_plan(allow_snapping=…)`.
-
-**Fertig, wenn:** der Gerätebeleg und ein Test die Voreinstellung begründen.
-
-### M0-3 — Notwendigkeit von REMOTE `S · am Gerät`
-
-Die Schreibprobe aus Stufe 5b einmal ohne und einmal mit `use_remote=True` ausführen.
-Ohne `--write-probe` bleibt das Skript garantiert lesend.
-
-**Fertig, wenn:** `WTConfig.use_remote` einen belegten Standard besitzt und das
-Verhalten beim Verbindungsabbruch dokumentiert ist.
-
-### M0-4 — Modul- und Verdrahtungsantworten `S · am Gerät`
-
-Rohantworten von `:INPut:MODUle?` und `:INPut:WIRing?` aufzeichnen, einschließlich
-eines unbestückten Elements, falls verfügbar. Zusätzlich die Firmwarevarianten der
-Line-Filter und die Anzahl angebotener SIGMA-Scopes festhalten.
-
-**Fertig, wenn:** Parser und Tests echte Antworttexte statt angenommener Formate
-verwenden.
-
-### M0-5 — Erkennung eines neuen Datensatzes `M · am Gerät`
-
-Statusregister und Ereignismechanismen des Geräts prüfen, insbesondere
-`:STATus:CONDition?`, Extended Event Register und Serial Poll **(prüfen)**. Parallel
-eine Messreihe schneller als die Aktualisierungsrate lesen und Dubletten zählen.
-
-**Fertig, wenn:** M3-3 entweder auf ein belegtes Ereignis oder auf eine ausdrücklich
-gewählte Dublettenerkennung setzt.
-
-### M0-6 — Transportdetails belegen `S · am Gerät`
-
-- Einheit von `TmcSetTimeout`
-- Antwortverhalten bei mit `;` verketteten Kommandos
-
-**Fertig, wenn:** Timeout und Kopfentfernung nicht mehr auf unbestätigten Annahmen
-beruhen.
-
----
-
-## M1 — Fundament
-
-### M1-1 — Fassade `WT3000` — **umgesetzt 2026-08-19**
-
-- [x] `WT3000.connect()`, `from_config()` und `from_transport()`
-- [x] Context Manager und fehlertolerantes Cleanup
-- [x] `wt.input`, `wt.ranges`, `wt.items`, `wt.measure`, `wt.device`
-- [x] Wiring-Units intern verdrahtet
-- [x] Item-Tabelle über `ItemAccess.applied()` sicher anwendbar
-- [x] Protokollzustand über `check_protocol_state()` prüfbar
-
-### M1-2 — Transport-Protokoll — **umgesetzt 2026-08-19**
-
-- [x] `Transport`-Protokoll
-- [x] `TmctlTransport` als konkrete Hardwareimplementierung
-- [x] `FakeTransport` mit gestückelten Antworten, Blockdaten und Fehlerfällen
-- [x] `WTSession` hängt am Protokoll statt an TMCTL
-- [x] vollständige gerätefreie Messschleife geprüft
-
-### M1-3 — Gerätesteckbrief statt harter Annahmen `M`
-
-`DeviceInfo` ist begonnen, aber noch nicht vollständig:
-
-- [x] **Dieselbe bestückte Elementliste an `InputConfig` und `RangeAccess` —
-  umgesetzt 2026-08-25.** `InputConfig` nimmt `elements` entgegen wie `RangeAccess`
-  seit jeher; die Fassade übergibt beiden `DeviceInfo.elements`. `_elements_of("ALL")`
-  löst damit gegen die Bestückung auf statt gegen die feste Liste `(1, 2, 3, 4)`, und
-  eine Elementnummer wird geprüft statt durchgereicht — dieselbe Regel, die
-  `RangeAccess.expand_scope()` seit Befund A-03 durchsetzt.
-- [x] **Der Steckbrief bleibt aktuell — umgesetzt 2026-08-25.**
-  `WT3000.refresh_device()` liest Verdrahtung, Module und Elementliste neu und zieht
-  `wt.input` und `wt.ranges` **an Ort und Stelle** nach; gehaltene Referenzen bleiben
-  gültig. Nach `wt.input.set_wiring()` geschieht das von selbst — `InputConfig` meldet
-  die Änderung über den Rückruf `on_wiring_changed`, ein schlichtes Callable ohne
-  Import, sodass die Importrichtung unberührt bleibt. Vorher stand nach jeder
-  Umverdrahtung der Zustand des Verbindungsaufbaus in `wt.device`, und
-  `expand_scope("SIGMA")` traf die Elemente der alten Verdrahtung.
-  `DeviceInfo.read(previous=…)` übernimmt dabei Identität und Optionen, statt `*IDN?`
-  und `*OPT?` erneut zu fragen: sie ändern sich während einer Verbindung nicht, und
-  ein diesmal fehlschlagender Query würde den Steckbrief schlechter machen als er war.
-- Bereichstabellen nach Modultyp auswählen
-- [x] **Optionen und Firmware erfassen — umgesetzt 2026-08-21.** `*OPT?` wird
-  beim Verbinden abgefragt und in `DeviceInfo.options` abgelegt; die Firmware
-  stand schon vorher aus `*IDN?` bereit. `supports(gruppe)` und
-  `require_option(gruppe)` prüfen jede der zehn optionsgebundenen
-  Kommandogruppen dagegen, bevor sie angesprochen wird — Voraussetzung für
-  Rang 3, 5, 8 und 10 aus
-  [ANALYSE_FEHLENDE_FUNKTIONEN.md](ANALYSE_FEHLENDE_FUNKTIONEN.md#4--priorisierte-kurzfassung).
-  `:MOTor` wird bewusst am Modellcode `-MV` und nicht an `MTR` entschieden
-  (Gerätebefund vom 21.08.2026).
-- unbekannte Module oder Tabellenwerte als `WTError` mit Kontext melden
-- Modellprüfung beim Verbinden mit deutlicher Warnung
-
-**Fertig, wenn:** ein 3-Element-Gerät oder ein Gerät mit anderem Strommodul ohne
-Codeänderung initialisiert werden kann.
-
-### M1-4 — Protokollzustand herstellen `S` — **umgesetzt 2026-08-25**
-
-- [x] `WT3000.protocol_state()` erhebt den Ist-Zustand der drei Knoten. Die Antworten
-  laufen durch `strip_response_header()` — genau der Fall, um den es geht, lässt das
-  Gerät `:COMMUNICATE:HEADER 1` statt `1` antworten.
-- [x] `WT3000.ensured_protocol_state()` als Context Manager: sichert, stellt auf den
-  Sollzustand, gibt beim Verlassen den Ausgangszustand zurück — im `finally`, also auch
-  bei Strg+C. Rückgabewert sind die tatsächlich geänderten Knoten mit ihrem vorherigen
-  Wert; ein leeres Dictionary heißt „war schon richtig", und dann geht auch kein
-  einziges Kommando hinaus.
-- [x] Reihenfolge mit Grund: `:COMMunicate:HEADer` zuerst — danach kommen alle
-  Rückleseproben ohne Kopf —, beim Zurücknehmen umgekehrt.
-- [x] Rein lesende Sitzungen: laufen durch, wenn der Zustand bereits stimmt; müsste
-  geschrieben werden, bleibt es beim klaren Abbruch, dessen Meldung beide Auswege nennt.
-
-**Bewusst nicht umgesetzt:** `record()` ruft den Ablauf **nicht** von selbst. Er
-schreibt, und ein Messaufruf, der unangekündigt am Gerätezustand dreht, wäre das
-Gegenteil dessen, wofür die beiden Schlösser dieses Treibers da sind. Der Aufruf gehört
-sichtbar in den Ablauf.
-
-**Fertig, wenn:** erfüllt — gerätefrei durchgespielt in
-[tests/test_protokollzustand.py](../tests/test_protokollzustand.py).
-
-### M1-5 — Fehlerpfade härten `S`
-
-- `drain_after_failure()` in einen begründeten Produktivpfad integrieren
-- verspätete Antworten und Timeoutwiederherstellung testen
-- eigene Timeout-Unterklasse unter `WTError`
-- erwartbare Tabellen-/Parserfehler an der Paketgrenze in `WTError` übersetzen
-- Bibliotheks-Logging mit `NullHandler`
-
-**Fertig, wenn:** ein simulierter Timeout mitten im Ablauf weder Folgeantworten
-verschiebt noch Cleanup verhindert.
-
----
-
-## M2 — Konfiguration lesen und einstellen
-
-### M2-1 — Fehlende Gerätegruppen `L` — **zur Hälfte umgesetzt 2026-08-21**
-
-Das Fachmodul [wt3000_deviceconfig.py](../src/wt3000_scpi/wt3000_deviceconfig.py)
-existiert seit dem 21.08.2026 mit Gettern, Settern, Snapshot (`capture()`) und
-Restore für seine erste Gruppe. Reihenfolge:
-
-1. Kommunikation
-2. [x] **Averaging** — umgesetzt als `ComputationConfig.averaging()` /
-   `set_averaging()` / `averaging_disabled()`
-3. [x] **Frequenzmessquelle** — `frequency_item()` / `set_frequency_item()`
-4. [x] **Integration** — umgesetzt, siehe M3-2
-5. [x] **Harmonische** — `HarmonicsConfig` (`:HARMonics`): Bandbreite,
-   Ordnungsbereich, PLL-Quelle und -Warnung, THD-Bezug, IEC-Objekt und
-   -Gruppierung. Erste Gruppe mit Optionspflicht; die Fassade prüft sie über
-   `DeviceInfo.require_option(":HARMonics")`. Weitere optionsabhängige Gruppen
-   (`:CBCycle`, `:MOTor`) stehen noch aus.
-6. Anzeige und System rein lesend
-
-Mit Punkt 2 und 3 kam die Wirkungsgradgleichung (`:MEASure:EFFiciency:ETA<x>`)
-sowie `SQFormula` und `SYNChronize` dazu — sie runden den Schnappschuss der
-Gruppe ab. Zu jeder schreibbaren Gruppe gehört ein `capture()`/`restore()`-Paar;
-damit steht die Vorlage für M2-4 (`SessionBackup`) bereit. Bewusst noch **nicht** enthalten und im Modulkopf einzeln benannt:
-`:MEASure:FUNCtion<x>` (benutzerdefinierte Ausdrücke), `:PC`, `:DMeasure`,
-`:COMPensation`, `:PHASe`, `:SAMPling`, `:MHOLd`.
-
-Vorgezogen wurde die Integration bewusst gegen die Nummernfolge: sie ist Rang 1
-der Anwendungsanalyse und hängt an keiner der offenen Parserfragen. Punkt 2 und 3
-sind am selben Tag gefolgt (Rang 2 der Analyse). Die Sorge
-aus M2-5 — jede neue Gruppe bringt eine weitere Parserkopie mit — ist dabei
-nicht eingetreten, weil das Modul ausschließlich die Regeln aus `wt3000_common`
-benutzt; die Aufzählungsregel ist dafür aus `wt3000_input` eine Schicht
-tiefergezogen worden.
-
-Schreiben wird nur für tatsächlich benötigte Gruppen freigegeben. Kommandonamen für
-noch nicht verwendete Gruppen sind vorab am Handbuch und Gerät zu prüfen.
-
-**Fertig, wenn:** ein strukturierter Gerätesnapshot erfasst, verglichen und für die
-schreibbaren Gruppen wiederhergestellt werden kann.
-
-### M2-2 — Setup-Speicher des Geräts `M · am Gerät`
-
-Prüfen, ob vollständige Setups über `*SAV`/`*RCL`, `:FILE` oder `:STORe` gesichert und
-geladen werden können. Das geräteeigene Setup dient als zusätzliches Sicherheitsnetz,
-nicht als Ersatz für die gezielte Wiederherstellung.
-
-### M2-3 — Messkonfiguration vervollständigen `M`
-
-- `:INPut:INDependent` ausdrücklich setzen
-- Eingangsart direkt/extern nur über eine eigens entsperrte Methode ändern
-- NULL und Peak-Over-Rücksetzung ergänzen **(prüfen)**
-- `InputPlan` als deklarativen Sollzustand für die gesamte Eingangskonfiguration
-- Semantik von `InputConfig.unlocked()` vorher entscheiden
-
-### M2-4 — Ein gemeinsames Backup `M` — **umgesetzt 2026-08-21**
-
-- [x] `SessionBackup` in [wt3000_backup.py](../src/wt3000_scpi/wt3000_backup.py)
-  bündelt Gerätesteckbrief, Input-Snapshot, Bereiche, Item-Tabelle samt Tail
-  **und die drei schreibbaren Gerätegruppen** (`:INTEGrate`, `:MEASure`,
-  `:HARMonics`) in einer versionierten JSON-Datei
-- [x] `wt.backup(pfad)` sichert, `wt.restore_backup(pfad)` lädt, stellt in
-  dokumentierter Reihenfolge wieder her und **prüft den Endzustand** — die
-  verbleibenden Abweichungen sind der Rückgabewert
-- [x] Identitätsprüfung: ein Backup von Gerät A wird nicht ohne `force=True` auf
-  Gerät B geschrieben
-- [x] Formatversion in der Datei, geprüft beim Laden
-
-Das Modul schreibt **keinen einzigen Parser und kein einziges Kommando** — jeder
-Baustein bringt Erfassung, Serialisierung und Rückweg selbst mit; `SessionBackup`
-legt nur die Reihenfolge fest und kontrolliert das Ergebnis.
-
-**Fertig, wenn:** erfüllt — Sichern, Verstellen, Zurückschreiben und Prüfen sind
-als Zyklus gerätefrei durchgespielt. Wie bei M2-1 und M3-2 steht die
-Geräteabnahme aus (M0-3).
-
-### M2-5 — Doppelte Regeln zusammenführen `M`
-
-Nach den Gerätebelegen aus M0-4/M0-6:
-
-- Parser aus `wt3000_input.py` auf die gemeinsamen Regeln umstellen
-- Kopfentfernung für echte Antworten eindeutig festlegen
-- Scope-/Zielnormalisierung vereinheitlichen
-- Stufenskript-Vorbedingungen und Messprofile zentral benennen
-
-**Fertig, wenn:** jede Parser- und Normalisierungsregel im Paket genau einmal
-implementiert ist.
-
----
-
-## M3 — Messung starten und stoppen
-
-### M3-1 — Aufzeichnung als steuerbares Objekt `M` — **umgesetzt 2026-08-25**
-
-**Vorentscheidung getroffen:** `WTSession` tut **beides** — sie serialisiert intern
-(`RLock` um `write`, `query`, `query_raw`, `query_block`, `drain_after_failure`) **und**
-gehört während einer Messung exklusiv dem Mess-Thread. Das Lock ist der Mechanismus, der
-Besitz die Regel; die Prüfung sitzt in `WTSession` und nicht in der Fassade, weil die
-Fachobjekte zwischengespeichert werden und eine vor dem Start geholte Referenz sonst an
-jeder Fassadenprüfung vorbeikäme. Ein Fremdzugriff endet in `ConcurrentAccessError`.
-
-- [x] **Klasse `Measurement`** mit `start()`, `stop()`, `wait()`, `is_running`, `stats`
-  und `error` — in [wt3000_measure.py](../src/wt3000_scpi/wt3000_measure.py), erreichbar
-  über `wt.measure.start()`
-- [x] **`threading.Event` als sofortiges Stoppsignal.** Das Warten zwischen zwei Takten
-  ist `stop_event.wait()` und nicht `time.sleep()` — sonst griffe ein `stop()` erst nach
-  dem laufenden Intervall, bei `:RATE 20 s` also bis zu zwanzig Sekunden später. Ein Test
-  misst gegen einen 3-s-Takt und fällt bei einem Rückbau.
-- [x] **Fehler aus dem Thread** bei `wait()`/`stop()` erneut auslösen. Ohne das endete
-  eine Ausnahme im Mess-Thread als Textausgabe von `threading` — als etwas, das kein
-  `except` fängt und keine Ablaufsteuerung bemerkt.
-- [x] **Generator `wt.measure.stream()`** ohne Hintergrundthread. Dort bleibt die Sitzung
-  zwischen zwei Samples frei, und Strg+C wirkt normal.
-- [x] **Cleanup im ausführenden Ablauf.** Die Senke wird vom Mess-Thread geöffnet *und*
-  geschlossen; HOLD nimmt der Generator in seinem `finally` zurück — auch bei `stop()`,
-  bei einem Fehler und bei einem Abbruch mitten im Schleifenrumpf (dafür der
-  ausdrückliche `strom.close()`).
-- [x] **Ein gemeinsamer Rumpf.** `run_measurement_loop()`, `Measurement` und `stream()`
-  sitzen alle auf dem Generator `iter_samples()`; eine zweite Signatur ist nicht
-  entstanden.
-
-**Zuständigkeit für den Gerätezustand — entschieden:** Bereiche und Item-Tabelle bleiben
-beim **Aufrufer** (`applied_ranges()`, `ItemAccess.applied()`) und wandern *nicht* in den
-Thread. Läge die Rückstellung im Thread, geschähe sie als Gerätezugriff zu einem
-Zeitpunkt, den der Aufrufer nicht kennt. Damit die Konfigurationsklammer nicht vor der
-Messung schließen kann, ist `Measurement` selbst ein Context Manager, und
-`WT3000.close()` beendet eine noch laufende Messung, bevor es selbst ans Gerät geht.
-
-`Sample` und `SampleSink` waren bereits vorhanden; die Schleife musste dafür nicht erneut
-an ein Ausgabeformat angepasst werden — aus `sink.write(...)` wurde das `yield`, das M4-1
-hier vorgesehen hatte.
-
-**Fertig, wenn:** erfüllt. 32 gerätefreie Fälle in
-[tests/test_messsteuerung.py](../tests/test_messsteuerung.py); drei Mutationsproben
-(Lock, Besitzprüfung, Stoppsignal) greifen.
-
-### M3-2 — Gerätesteuerung `M · am Gerät` — **teilweise umgesetzt 2026-08-21**
-
-- [x] **Integration starten, stoppen und zurücksetzen** — `IntegrationConfig` in
-  [wt3000_deviceconfig.py](../src/wt3000_scpi/wt3000_deviceconfig.py) mit
-  `start()`, `stop()`, `reset()`, `running()`, Betriebsart, Timer,
-  Echtzeitfenster und Autokalibrierung. Gerätefrei geprüft; die
-  **Geräteabnahme steht aus** und hängt an M0-3 (jedes dieser Kommandos ist
-  ein Set-Kommando).
-- [x] **Messgrößen dazu** — `build_integration_profile()` (TIME, WH, WHP, WHM,
-  AH, AHP, AHM, WS, WQ je Element und SIGMA), erreichbar über
-  `wt.items.integration_profile()`
-- Einzelmessung im HOLD-Betrieb **(prüfen)** — unverändert offen; der Befund zu
-  `:SINGle` steht im Klassenkopf von `NumericHold`
-- `*OPC?` für langsame Zustandswechsel prüfen — offen. Ersatzweise gebaut ist
-  `wait_until_finished()`, das den Zustand pollt; die Begründung (UPD-Bit am
-  Gerät widerlegt) steht dort
-- `*CLS` vor einem Lauf; `*RST` nicht als normalen Bedienweg anbieten — offen
-
-**Fertig, wenn:** eine Wh-Messung über definierte Dauer sicher gestartet, beendet und
-ausgelesen werden kann. — Der Weg dorthin ist gebaut und gerätefrei durchgespielt;
-zum Abhaken fehlt der Lauf am realen Gerät.
-
-### M3-3 — Gerätetakt statt blindem `sleep` `M` — **Ersatzweg umgesetzt 2026-08-25**
-
-Der Meilenstein nannte zwei Wege: bevorzugt auf ein belegtes Aktualisierungsereignis
-warten, **andernfalls** Dubletten erkennen und mit `SampleMark.DUPLICATE` kennzeichnen.
-Der zweite Weg ist gebaut, der erste hängt unverändert an M0-5.
-
-- [x] **Taktkopplung.** `run_measurement_loop()` liest `:RATE?` vor dem ersten Zyklus
-  und benennt einen Takt, der die Geräterate unterschreitet — mit beiden Zahlen, dem
-  zu erwartenden Wiederholungsfaktor und dem Weg zur Abhilfe. Die Prüfung meldet, sie
-  bricht **nicht** ab: seit die Wiederholungen gekennzeichnet sind, sind zu schnell
-  gelesene Daten nicht falsch, sondern redundant — und Redundanz ist eine zulässige
-  Wahl. Abschaltbar über `check_update_rate=False`.
-- [x] **Dublettenerkennung.** Jeder Zyklus wird mit dem vorigen verglichen; ein
-  bitgleicher bekommt `SampleMark.DUPLICATE`, erscheint in der Spalte `status_flags`
-  jeder Senke und wird in `LoopStatistics.duplicates` gezählt.
-  `LoopStatistics.measured_samples` nennt die Zahl echter Messpunkte. Abschaltbar über
-  `mark_duplicates=False`.
-- [x] **Vergleich auf Rohbytes**, nicht auf geparsten Werten — `read_numeric_block()`.
-  Ein Wert ohne Daten wird zu NaN, und `NaN != NaN`; ein Vergleich der Wertelisten
-  hätte ausgerechnet dann versagt, wenn das Gerät nichts liefert.
-- [x] **Geräterate in den Metadaten** (`update_rate_s`) und damit in JSONL und Sidecar.
-  Ohne sie ist eine Dublettenzahl in der fertigen Datei nicht zu beurteilen.
-- [ ] Ereignisgesteuertes Warten statt fester Taktung — bleibt offen, **hängt an M0-5**.
-
-Die vorhandene driftfreie Taktung und die Overrun-Statistik sind unverändert.
-
-**Fertig, wenn:** für den Ersatzweg erfüllt — eine Messreihe, die schneller liest, als
-das Gerät aktualisiert, ist in der Ausgabedatei ohne Zusatzwissen als solche erkennbar.
-Der bevorzugte Weg bleibt bis zum Gerätetermin offen.
-
-### M3-4 — Verbindungsabbruch überleben `M`
-
-- fehlgeschlagenen Zyklus als `SampleMark.MISSING` erfassen
-- Werte vorzugsweise mit `NO_DATA` auf die feste Spaltenzahl auffüllen
-- nach konfigurierbarer Fehlerzahl neu verbinden
-- Item-Tabelle, Bereiche und Protokollzustand vor dem Fortsetzen prüfen
-- nach zu vielen Fehlschlägen sauber abbrechen
-
-Benötigt M1-5 und M2-4.
-
----
-
-## M4 — Datenexport
-
-### M4-1 — Datensatz `Sample` — **umgesetzt 2026-08-20**
-
-- [x] ein Datentyp zwischen Messung und Ausgabe
-- [x] `SampleMark.OK`, `DUPLICATE`, `MISSING`
-- [x] gemeinsame Statuskennzeichnung ohne zusätzliche CSV-Spalte
-
-### M4-2 — `SampleSink` — **umgesetzt 2026-08-20**
-
-- [x] formatunabhängiges Protokoll
-- [x] `CsvSink`, `JsonlSink`, `CallbackSink`, `MultiSink`
-- [x] Senkenlebenszyklus in der Messschleife
-- [x] zentrale strenge Spaltenregel
-
-### M4-3 — Einheiten und Metadaten `M` — **Einheiten umgesetzt 2026-08-25**
-
-- [x] **Funktionsname auf Einheit abbilden.** `FUNCTION_UNITS` und `unit_of()` in
-  [wt3000_numeric.py](../src/wt3000_scpi/wt3000_numeric.py), dazu `NumericItem.unit`,
-  `ItemTable.units()` und `ItemTable.unit_map()`. Aufgenommen sind ausschließlich
-  belegte Größen: die elektrischen Grundgrößen, die Frequenz und die
-  Integrationsgrößen. Der Unterschied zwischen **dimensionslos** (`""`, etwa `LAMBDA`)
-  und **nicht belegt** (`None`) wird bis in die Ausgabedatei durchgehalten.
-- [x] **Einheiten gehen mit den Daten hinaus.** Die Messschleife legt sie als
-  `metadata["units"]` in jede Senke — aus derselben Item-Tabelle wie die Spaltennamen,
-  damit Kopf und Einheiten so wenig auseinanderlaufen können wie Kopf und Daten. JSONL
-  und Sidecar tragen sie ohne Zutun; `CsvSink(unit_row=True)` schreibt eine zweite
-  Kopfzeile. Eine Angabe des Aufrufers hat Vorrang.
-- [ ] Skalierungsfaktoren und Gerätesteckbrief als **verbindliche** Metadaten — sie
-  stehen heute im optionalen Sidecar.
-- [ ] Feste Bindung zwischen Datendatei und Sidecar, damit beide nicht getrennt
-  vergessen werden können.
-- [ ] **ZU VERIFIZIEREN:** Einheiten der neun Oberschwingungsfaktoren (`UTHD`, `ITHD`,
-  `PTHD`, `UTHF`, `ITHF`, `UTIF`, `ITIF`, `HVF`, `HCF`). Der Kommandoauszug im Projekt
-  ist die Kommandoreferenz und enthält keine Einheitentabelle; ein plausibles `%` wäre
-  geraten. Bis dahin liefern sie `None`.
-
-**Fertig, wenn:** eine Messdatei ohne Zusatzwissen eindeutig interpretierbar ist — die
-Einheiten sind da, die verbindliche Bindung an den Gerätesteckbrief fehlt noch.
-
-### M4-4 — Dateiverwaltung `S`
-
-- Rotation nach Zeit, Größe oder Zeilenanzahl
-- Fortsetzen nur bei passendem Format und Spaltenkopf
-- Ziel, Namensschema und Trennzeichen aus Konfiguration/CLI
-
----
-
-## M5 — Auslieferbarkeit
-
-### M5-1 — Paket `S` — **teilweise umgesetzt**
-
-Vorhanden: `pyproject.toml`, Python ≥ 3.10, `src`-Layout, Test-/Dev-Gruppen,
-Version `0.3.0`.
-
-Offen:
-
-- `py.typed`
-- Lizenz, Autoren, Klassifizierer und Projekt-URLs
-- Änderungsformat für Releases
-- klare Versionsregel für brechende Änderungen vor 1.0
-
-### M5-2 — Gemeinsame Kommandozeile `M` — **teilweise umgesetzt**
-
-Vorhanden: Konfigurationsauflösung über Parameter, Umgebung und JSON; Stufe 5b hat den
-sicheren Schalter `--write-probe`.
-
-Offen ist ein Einstiegspunkt `wt3000` mit Unterbefehlen wie `info`, `config`,
-`measure` und `restore`. Die Stufenskripte bleiben Beispiele, sollen aber keine fünf
-voneinander abweichenden Kommandozeilen entwickeln.
-
-### M5-3 — Dokumentation `M` — **teilweise umgesetzt**
-
-Eine README mit Installation, Verbindungsparametern, Sicherheitskonzept und Beispielen
-ist vorhanden. Dieser Dokumentationsdurchgang ändert sie ausdrücklich nicht.
-
-Offen:
-
-- Gerätezustand und Wiederherstellung als eigenes Anwenderdokument
-- README später gegen Fassade, neutrale Defaults und neue Senken abgleichen
-- Hardwarebelege aus M0 in Feststellungen überführen
-
-### M5-4 — Prüfautomatisierung `S` — **teilweise umgesetzt**
-
-Vorhanden: pytest, Ruff, Mypy und `.gitattributes`; alle aktuellen Prüfungen sind grün.
-
-Offen:
-
-- CI bei jedem Commit
-- Testabdeckung messen und fachlich sinnvolle Mindestwerte festlegen
-- optionale weitere Ruff-Regeln getrennt und bewusst bewerten
-
----
-
-## 3 — Heutige und geplante Architektur
+| Fundament | Transport-Protokoll, Fassade, Konfigurationsauflösung, Geräte-Fake | einheitliche Timeout- und Fehlerstrategie |
+| Gerätekonfiguration | Input, Bereiche, Items, Integration, Berechnung, Harmonics, Backups | Hardwarebelege und Parserkonsolidierung |
+| Messung | blockierend, Generator und steuerbarer Hintergrundlauf | Wiederverbindung und fehlende Zyklen |
+| Export | CSV, JSONL, Callback, MultiSink, Status und Einheiten | Rotation und feste Metadatenbindung |
+| Auslieferung | installierbares Paket, README, Tests, Ruff, Mypy | CLI, CI, Lizenz und vollständige Metadaten |
+
+## Meilensteine
+
+### M0 — Gerätefragen schließen
+
+| Punkt | Ziel | Stand |
+|---|---|---|
+| M0-1 | Bereichssyntax für Spannung, Direktstrom und Sensorstrom belegen | Spannung belegt; Strom/Sensor offen |
+| M0-2 | Verhalten bei ungültigen Stellwerten belegen | offen |
+| M0-3 | Notwendigkeit von REMOTE für Schreibkommandos klären | offen |
+| M0-4 | reale Modul- und Wiringantworten erfassen | teilweise belegt |
+| M0-5 | zuverlässige Erkennung eines neuen Datensatzes prüfen | UPD-Polling widerlegt; Statusfilter/SRQ offen |
+| M0-6 | Timeout-Einheit und Mehrfachantworten belegen | offen |
+
+**Fertig, wenn:** alle Versuche mit Kommando, Rohantwort, Rücklesewert, Fehlerqueue,
+Modell und Firmware protokolliert sind.
+
+### M1 — Fundament
+
+| Punkt | Ergebnis bzw. Ziel | Stand |
+|---|---|---|
+| M1-1 | öffentliche Fassade `WT3000` | erledigt 19.08.2026 |
+| M1-2 | austauschbares `Transport`-Protokoll und `FakeTransport` | erledigt 19.08.2026 |
+| M1-3 | Gerätesteckbrief statt harter Annahmen | weitgehend erledigt; modulabhängige Bereichstabellen offen |
+| M1-4 | Protokollzustand erheben, herstellen und garantiert zurückstellen | erledigt 25.08.2026 |
+| M1-5 | Timeout, Antwortqueue und öffentliche Fehlersemantik härten | offen |
+
+M1-5 ist fertig, wenn ein simulierter Timeout mitten im Ablauf weder Folgeantworten
+verschiebt noch Cleanup verhindert und erwartbare Paketfehler konsistent unter
+`WTError` liegen.
+
+### M2 — Konfiguration lesen und einstellen
+
+| Punkt | Ergebnis bzw. Ziel | Stand |
+|---|---|---|
+| M2-1 | Integration, Averaging, Frequenzquelle, Effizienz, Synchronisation und Harmonics | Kernumfang erledigt 21.08.2026; Spezialgruppen offen |
+| M2-2 | geräteeigenen Setup-Speicher als zusätzliches Sicherheitsnetz prüfen | offen, am Gerät |
+| M2-3 | `InputPlan`, unabhängige Eingänge, NULL/Peak-Over und klare Freigabesemantik | offen |
+| M2-4 | gemeinsames, versioniertes `SessionBackup` mit Identitäts- und Endprüfung | erledigt 21.08.2026 |
+| M2-5 | Parser-, Header-, Scope- und Profilregeln zusammenführen | offen |
+
+Der offene Spezialumfang von M2-1 umfasst insbesondere CBCycle, Motor,
+benutzerdefinierte Ausdrücke und weitere optionsabhängige Gruppen. Er wird nur bei
+konkretem Bedarf umgesetzt.
+
+### M3 — Messung starten und stoppen
+
+| Punkt | Ergebnis bzw. Ziel | Stand |
+|---|---|---|
+| M3-1 | `Measurement` mit `start()`, `stop()`, `wait()`, Status und Fehlerweitergabe; außerdem `stream()` | erledigt 25.08.2026 |
+| M3-2 | Integration starten/stoppen und passendes Messprofil | Softwarepfad erledigt; Geräteabnahme offen |
+| M3-3 | Geräterate berücksichtigen und Dubletten erkennen | Ersatzweg erledigt; Ereignissteuerung offen |
+| M3-4 | Kommunikationsabbrüche überleben | offen |
+
+Für M3-4 sind vorgesehen:
+
+- fehlgeschlagenen Zyklus als `SampleMark.MISSING` erfassen,
+- Werte mit `NO_DATA` auf die feste Spaltenzahl auffüllen,
+- nach konfigurierbarer Fehlerzahl neu verbinden,
+- Item-Tabelle, Bereiche und Protokollzustand vor Fortsetzung prüfen,
+- nach zu vielen Fehlern sauber abbrechen.
+
+M3-4 benötigt M1-5 und M2-4 und ist die zentrale Voraussetzung für
+unbeaufsichtigte Langzeitmessungen.
+
+### M4 — Datenexport
+
+| Punkt | Ergebnis bzw. Ziel | Stand |
+|---|---|---|
+| M4-1 | formatunabhängiger Datensatz `Sample` mit Status | erledigt 20.08.2026 |
+| M4-2 | `SampleSink`, CSV, JSONL, Callback und MultiSink | erledigt 20.08.2026 |
+| M4-3 | Einheiten und verbindliche Metadaten | Einheiten erledigt; feste Bindung an Geräte-/Messkontext offen |
+| M4-4 | Rotation und sicheres Fortsetzen | offen |
+
+M4-3 ist fertig, wenn eine Messdatei ohne Zusatzwissen eindeutig interpretierbar ist.
+M4-4 benötigt Rotation nach Zeit, Größe oder Zeilenanzahl sowie eine Prüfung von
+Format und Spaltenkopf vor dem Fortsetzen.
+
+### M5 — Auslieferbarkeit
+
+| Punkt | Vorhanden | Offen |
+|---|---|---|
+| M5-1 Paket | `pyproject.toml`, `src`-Layout, Python ≥ 3.10, Abhängigkeitsgruppen | `py.typed`, Lizenz, Autoren, Klassifizierer, URLs, Versions- und Änderungsregel |
+| M5-2 CLI | gemeinsame Konfigurationsauflösung; sichere Hardwareproben | Einstieg `wt3000` mit Unterbefehlen wie `info`, `config`, `measure`, `restore` |
+| M5-3 Dokumentation | README, Handbuch, Roadmap und Referenz | Hardwarebelege nachziehen; Zustands-/Restore-Leitfaden bei Bedarf |
+| M5-4 Prüfautomatisierung | pytest, Ruff, Mypy, Zeilenendungsregel | CI und fachlich begründete Abdeckungsziele |
+
+## Architektur
 
 ```text
-Transport        wt3000_transport
-                 Transport, TmctlTransport, FakeTransport
-
-Sitzung/Regeln   wt3000_core, wt3000_common
-
-Fachzugriffe     wt3000_numeric, wt3000_rangeio, wt3000_input
-                 wt3000_deviceconfig   (M2-1, seit 2026-08-21: ':INTEGrate',
-                                        ':MEASure', ':HARMonics')
-
-Abläufe          wt3000_itemspec, wt3000_ranging, wt3000_measure
-                 wt3000_backup         (M2-4, seit 2026-08-21)
-Ausgabe          wt3000_sinks
-
-Fassade          wt3000_device
-
-Geplant          cli.py                (M5-2)
+Transport       wt3000_transport
+Sitzung         wt3000_core, wt3000_common
+Fachzugriffe    wt3000_numeric, wt3000_rangeio, wt3000_input,
+                wt3000_deviceconfig
+Abläufe         wt3000_itemspec, wt3000_ranging, wt3000_measure,
+                wt3000_backup
+Ausgabe         wt3000_sinks
+Fassade         wt3000_device
+Geplant         cli.py
 ```
 
-`SampleSink` bleibt neben `Sample` in `wt3000_measure.py`; die konkreten Senken
-bleiben in `wt3000_sinks.py`. Ein separates `wt3000_export`-Modul ist nicht geplant.
-Die tatsächlichen Importgrenzen werden durch `tests/test_package_layout.py` geprüft.
+`Sample` und das `SampleSink`-Protokoll bleiben bei der Messlogik, konkrete Senken in
+`wt3000_sinks.py`. Die Importgrenzen werden durch Layouttests geschützt.
 
----
-
-## 4 — Reihenfolge und Abhängigkeiten
+## Abhängigkeiten und nächste Schritte
 
 ```text
-M0-4/M0-6 ──> M1-3 ──> M2-5 ──> M2-1 ──> M2-4
-M0-1/M0-2 ─────────────> M2-3 ────────────> M2-4
-M0-3 ──────> M1-4 und Geräteabnahme M3-2
-M0-5 ──────> M3-3
-
-M1-5 ──────> M3-4
-M3-1 ──────> M3-3/M3-4
-M4-1/M4-2 ─> M4-3 ──> M4-4
+M0-4/M0-6 -> M2-5 -> weitere Konfigurationsgruppen
+M0-1/M0-2 -> M2-3
+M0-3       -> Geräteabnahme M3-2
+M0-5       -> Ereignisweg M3-3
+M1-5       -> M3-4
+M4-3       -> M4-4
 ```
 
-**Empfohlene nächste Schritte:**
+Empfohlene Reihenfolge:
 
-1. M0 als ein protokollierter Gerätetermin
-2. M1-3 und M2-5, damit Elementlisten und Parser vor neuen Gerätegruppen geklärt sind
-3. M1-5 für belastbare Fehlerpfade
-4. M3-1 für eine steuerbare Messung
-5. M4-3 und danach M2-1, je nach unmittelbarem Nutzungsbedarf
+1. M0 als gebündelter Gerätetermin,
+2. M2-5 für eindeutige Parser- und Scope-Regeln,
+3. M1-5 und M3-4 für robuste Langzeitmessungen,
+4. M4-3/M4-4 für dauerhaft interpretierbare Dateien,
+5. M5 für CLI, CI und Auslieferung.
 
----
+## Bewusst nicht im Kernumfang
 
-## 5 — Bewusst nicht enthalten
-
-| Thema | Begründung / Eintrittsbedingung |
+| Thema | Grund |
 |---|---|
-| Grafische Oberfläche | baut bei Bedarf als eigenes Projekt auf `CallbackSink` auf |
-| Wellenform-/Rohdatenerfassung | andere Datenmengen und Kommandogruppen; erst bei konkreter Messaufgabe |
-| Weitere Yokogawa-Modelle | erst nach dem vollständigen Gerätesteckbrief M1-3 |
-| VISA-/Socket-Transport | Fuge ist offen; Umsetzung erst bei Bedarf |
+| GUI | kann als eigenes Projekt auf `CallbackSink` aufbauen |
+| Wellenform-/Rohdaten | anderer Datenpfad; erst bei konkreter Messaufgabe |
+| weitere Yokogawa-Modelle | erst nach vollständigem Gerätesteckbrief |
+| VISA-/Socket-Transport | Transportfuge ist vorhanden; Umsetzung bei Bedarf |
 | `asyncio`-API | Threads und Generator decken den geplanten Betrieb ab |
-| Parquet im Kernpaket | würde eine erste schwere Laufzeitabhängigkeit einführen |
-| Automatische Kalibrierprüfung | berührt die Eichung und benötigt ein getrennt freigegebenes Werkzeug |
-
----
-
-## 6 — Kurzfassung
-
-Der Unterbau ist belastbar und gerätefrei geprüft. Fassade, Datensatz und
-formatunabhängiger Export sind umgesetzt. Als Nächstes müssen die verbleibenden
-Geräteannahmen belegt, der Gerätesteckbrief vervollständigt, Parser vereinheitlicht
-und Fehlerpfade gehärtet werden. Danach kann die vorhandene Messschleife zu einer
-steuerbaren, wiederaufnahmefähigen Langzeitmessung ausgebaut werden. Einheiten,
-Metadaten, CLI und CI schließen den Weg zur auslieferbaren Bibliothek ab.
+| Parquet im Kernpaket | würde eine schwere Laufzeitabhängigkeit einführen |
+| automatische Kalibrierprüfung | berührt die Eichung und braucht einen getrennt freigegebenen Ablauf |

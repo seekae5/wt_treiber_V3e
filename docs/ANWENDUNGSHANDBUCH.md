@@ -1,6 +1,6 @@
 # Anwendungshandbuch des Python-Treibers `wt3000-scpi`
 
-Stand: 20. August 2026, Paketversion `0.3.0` (experimentell)
+Stand: 25. August 2026, Paketversion `0.3.0` (experimentell)
 
 Dieses Handbuch beschreibt die im aktuellen Repository bereits verfügbaren, für die
 Benutzung des Yokogawa WT3000 wichtigen Python-Schnittstellen. Die Gliederung folgt
@@ -9,10 +9,10 @@ wie Parser mit führendem Unterstrich und die ausführbaren Entwicklungsstufen
 `stage2_...` bis `stage5b_...` sind nicht Teil der Anwender-API und werden deshalb
 nicht einzeln aufgeführt.
 
-> **Wichtiger Reifegrad-Hinweis:** Der Treiber ist noch experimentell. Messwerte,
-> Eingangsparameter, Bereiche und Item-Tabellen sind bereits zugänglich. Eine
-> steuerbare Messung mit `start()`/`stop()`, Integrationsmessungen, Averaging,
-> Oberschwingungskonfiguration und Gerätesetups sind noch nicht implementiert.
+> **Reifegrad:** Der Treiber ist experimentell. Konfiguration, Bereiche, Items,
+> Integration, Berechnung, Harmonics, Backups und steuerbare Messungen sind
+> gerätefrei geprüft. Für produktive Schreib- und Langzeitabläufe stehen noch
+> Hardwareabnahmen sowie Wiederverbindung und Dateirotation aus.
 
 ## Inhaltsübersicht
 
@@ -30,7 +30,7 @@ nicht einzeln aufgeführt.
 12. Eigene Item-Tabelle und Messreihe kombiniert verwenden
 13. Fehlerklassen
 14. Transport, Tests und allgemeine Hilfsfunktionen
-15. Noch nicht verfügbare Gerätefunktionen
+15. Weitere Fachzugriffe und Grenzen
 
 ## 1. Schnellstart und Sicherheitsmodell
 
@@ -784,12 +784,16 @@ nicht zur Item-Tabelle passenden Werteanzahl.
 | Methode | Bedeutung |
 |---|---|
 | `record(sink, table, ...)` | Führt eine blockierende Messschleife in eine beliebige Senke aus. |
+| `start(sink, table, ...)` | Startet im Hintergrund und liefert ein `Measurement` mit `stop()`, `wait()` und `is_running`. Während des Laufs gehört die Sitzung dem Mess-Thread. |
+| `stream(table, ...)` | Liefert `Sample`-Objekte als Generator im Thread des Aufrufers; zwischen zwei Samples bleibt die Sitzung frei. |
 | `record_csv(csv_path, table, ...)` | Bequemer Spezialfall, der selbst einen `CsvSink` erzeugt. |
 
 Wichtige optionale Parameter sind `interval_s`, `max_samples`, `max_duration_s`,
 `use_hold`, `record_condition`, `log_every`, `metadata_path` und `parameters`.
 Mindestens ein Limit ist für eingebettete Anwendungen empfehlenswert; ohne Limit läuft
-die Schleife bis `Strg+C`.
+die Aufzeichnung bis zum Abbruch. `record()` ist der einfachste Weg für ein bekanntes
+Ende, `start()` für parallele Anlagenaktionen und `stream()` für Entscheidungen nach
+jedem Datensatz.
 
 **Protokollzustand vor der ersten Messung.** `:COMMunicate:HEADer 0` und
 `:NUMeric:FORMat FLOat` sind Voraussetzung der Binärauswertung. `record()` prüft das
@@ -1044,19 +1048,25 @@ Die ähnlich benannten Parser in `wt3000_input.py` (`target_node`, `strip_header
 Bausteine für eigene Erweiterungen der `:INPut`-Gruppe. Für normale Gerätebedienung
 werden sie automatisch von `InputConfig` benutzt.
 
-## 15. Noch nicht verfügbare Gerätefunktionen
+## 15. Weitere Fachzugriffe und Grenzen
 
-Der aktuelle Code stellt insbesondere noch keine Anwender-Methoden für folgende
-Funktionen bereit:
+Die folgenden Zugriffe sind über die Fassade verfügbar; ihre Detail-API ist bewusst
+nicht ein zweites Mal neben den Klassendocstrings ausformuliert:
 
-- Integration starten, stoppen oder zurücksetzen sowie Wh-/Ah-Abläufe;
-- nicht blockierende Messung mit `start()`, `stop()` oder Datenstream;
-- Averaging-Konfiguration;
-- Oberschwingungsanalyse und deren Gerätekonfiguration;
-- Speichern und Laden von Gerätesetups;
-- sichere automatische Herstellung des benötigten Protokollzustands;
-- Erkennung und Markierung doppelter oder ausgefallener Messzyklen.
+| Zugriff | Zweck |
+|---|---|
+| `wt.integration` | Modus, Timer, Echtzeitfenster, Autokalibrierung, Start/Stop/Reset und Zustandsüberwachung |
+| `wt.computation` | Averaging, Frequenzquelle, Wirkungsgrad, SQ-Formel und Synchronisation |
+| `wt.harmonics` | Band, Ordnungen, PLL, THD und IEC-Gruppierung; verlangt passende Geräteoption |
+| `wt.backup(path)` | gemeinsamen Sitzungszustand erfassen und optional als JSON speichern |
+| `wt.restore_backup(backup, force=False)` | Zustand mit Identitätsprüfung wiederherstellen und verbleibende Abweichungen liefern |
+| `wt.ensured_protocol_state()` | benötigten Protokollzustand temporär herstellen und garantiert zurückstellen |
 
-Diese Grenzen sind wichtig: Das Vorhandensein des allgemeinen Notausgangs
-`wt.session.write(...)` bedeutet nicht, dass dafür bereits dieselben Sicherungs-,
-Backup- und Verifikationsabläufe wie für die dokumentierten Fachfunktionen existieren.
+Noch nicht als Fach-API vorhanden sind CBCycle, Motor, Flicker, Analogausgang,
+Wellenform-/Rohdatenzugriff und geräteinterne Datei-/Setupverwaltung. Ebenfalls offen
+sind automatische Wiederverbindung, Darstellung ausgefallener Zyklen und
+Dateirotation. Details und Prioritäten stehen in [ROADMAP.md](ROADMAP.md).
+
+`wt.session.write(...)` bleibt ein Notausgang auf die untere Ebene. Seine Existenz
+bedeutet nicht, dass beliebige SCPI-Kommandos dieselben Sicherungs-, Backup- und
+Verifikationsgarantien wie die dokumentierten Fachzugriffe besitzen.
