@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-# UEBERARBEITET (Punkt 4, src-Layout): paketrelative Importe.
 from .wt3000_core import ProtocolError, WTSession
 
 _log = logging.getLogger("wt3000.numeric")
@@ -97,8 +96,8 @@ class NumericItem:
     def unit(self) -> "str | None":
         """Einheit dieses Items. None heisst 'nicht bekannt'.
 
-        NEU (ROADMAP M4-3, Maßnahme A5). Die Einheit haengt allein an der
-        Funktion, nicht am Element: 'U1' und 'USIGMA' sind beide Volt.
+        Die Einheit haengt an der Funktion, nicht am Element: 'U1' und
+        'USIGMA' sind beide Volt.
         """
         if self.is_none:
             return None
@@ -119,7 +118,7 @@ class NumericItem:
 
 
 # ---------------------------------------------------------------------------
-# NEU (ROADMAP M4-3, Maßnahme A5): Einheiten
+# Einheiten
 # ---------------------------------------------------------------------------
 #
 # Eine Messdatei, in deren Kopf 'U1,I1,P1' steht, ist ohne Zusatzwissen nicht
@@ -139,7 +138,7 @@ class NumericItem:
 # Einheitentabelle enthaelt er nicht. Sie liefern deshalb None und nicht etwa
 # ein plausibles '%': eine geratene Einheit an einem Messwert ist schlimmer
 # als eine fehlende, weil sie geglaubt wird.
-# ZU VERIFIZIEREN (ROADMAP M4-3): Einheiten der neun Oberschwingungsfaktoren
+# ZU VERIFIZIEREN: Einheiten der neun Oberschwingungsfaktoren
 # am Geraet oder aus IM WT3001E-01EN nachtragen.
 #
 # Die leere Zeichenkette bedeutet "dimensionslos und das ist bekannt"
@@ -173,8 +172,8 @@ FUNCTION_UNITS: dict[str, str] = {
 def unit_of(function: str) -> "str | None":
     """Einheit einer Messfunktion. None heisst 'nicht bekannt'.
 
-    NEU (ROADMAP M4-3). Zur Abgrenzung von '' siehe den Kopf von
-    FUNCTION_UNITS: '' ist eine Aussage, None ist deren Fehlen.
+    Zur Abgrenzung von '' siehe den Kopf von FUNCTION_UNITS: '' ist eine
+    Aussage, None ist deren Fehlen.
     """
     return FUNCTION_UNITS.get(function.strip().upper())
 
@@ -221,8 +220,7 @@ class ItemTable:
     def units(self) -> tuple["str | None", ...]:
         """Einheiten in der Reihenfolge der Items. None heisst 'nicht bekannt'.
 
-        NEU (ROADMAP M4-3, Maßnahme A5). Gegenstueck zu den Spaltennamen aus
-        'item.key' - dieselbe Reihenfolge, dieselbe Laenge.
+        Gegenstueck zu 'item.key': dieselbe Reihenfolge und Laenge.
         """
         return tuple(item.unit for item in self.items)
 
@@ -322,10 +320,8 @@ class ItemTable:
         das Suffix '#2', '#3' usw. Die geordnete Liste bleibt ueber
         zip(table.items, values) jederzeit verfuegbar.
 
-        UEBERARBEITET (P-3, siehe PLAN_BEFUNDE_2026-08-19.md): Eine abweichende
-        Anzahl bleibt hier bewusst eine WARNUNG - anders als in
-        read_numeric_values() und CsvRecorder.write(), die seit P-3 hart
-        abbrechen.
+        Eine abweichende Anzahl bleibt hier bewusst eine WARNUNG - anders als
+        im Datenpfad von 'read_numeric_values()' und den Senken.
 
         Die Trennung ist Absicht. Diese Methode ist eine Bequemlichkeit fuer
         Anzeige und Diagnose: sie liefert ein Dictionary zum Nachschlagen, und
@@ -387,9 +383,7 @@ def read_numeric_block(
 ) -> tuple[bytes, list[NumericValue]]:
     """Wie read_numeric_values(), liefert aber auch die Rohbytes des Blocks.
 
-    NEU (ROADMAP M3-3): Die Dublettenerkennung der Messschleife vergleicht
-    einen Zyklus mit dem vorigen. Sie tut das auf den ROHBYTES und nicht auf
-    den geparsten Werten - aus zwei Gruenden:
+    Die Dublettenerkennung vergleicht Rohbytes statt geparster Werte:
 
       * NaN. Ein Wert ohne Daten kommt als NaN heraus, und NaN != NaN. Ein
         Vergleich der Wertelisten wuerde jeden Zyklus mit einem einzigen
@@ -420,13 +414,12 @@ def read_numeric_block(
 def read_numeric_values(
     session: WTSession,
     expected_count: int | None = None,
-    strict: bool = True,  # UEBERARBEITET (P-3)
+    strict: bool = True,
 ) -> list[NumericValue]:
     """':NUMeric:NORMal:VALue?' im FLOat-Format lesen und parsen.
 
-    UEBERARBEITET (P-3, siehe PLAN_BEFUNDE_2026-08-19.md): Eine von
-    'expected_count' abweichende Werteanzahl ist ab jetzt ein Fehler, keine
-    Warnung mehr.
+    Eine von 'expected_count' abweichende Werteanzahl ist im strengen Modus
+    ein Fehler, keine Warnung.
 
     Der Grund liegt eine Schicht hoeher: der Spaltenkopf der CSV entsteht aus
     der Item-Tabelle, die Datenzeilen aus dieser Liste. Weichen die Laengen
@@ -439,13 +432,8 @@ def read_numeric_values(
     jemand am Bedienfeld etwas umgestellt hat. Weitermessen waere dann kein
     Notbetrieb, sondern das Erzeugen falsch beschrifteter Messdaten.
 
-    strict=False stellt die alte Warnung wieder her. Gedacht fuer Diagnose,
-    nicht fuer Messlaeufe.
-
-    UEBERARBEITET (ROADMAP M3-3): duenne Weiterleitung an read_numeric_block().
-    Wer die Rohbytes braucht - die Messschleife tut es fuer die
-    Dublettenerkennung - nimmt jene Funktion; alle uebrigen Aufrufer wollen
-    genau das hier und sollen sich mit dem Block nicht befassen muessen.
+    strict=False warnt nur und ist fuer Diagnose, nicht fuer Messlaeufe.
+    Wer zusaetzlich Rohbytes braucht, verwendet 'read_numeric_block()'.
     """
     _, values = read_numeric_block(session, expected_count, strict)
     return values

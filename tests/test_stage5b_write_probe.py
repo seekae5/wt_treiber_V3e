@@ -1,9 +1,8 @@
 # =============================================================================
 # Datei: tests/test_stage5b_write_probe.py
-# NEU (P-5, siehe PLAN_BEFUNDE_2026-08-19.md): die Voreinstellung von Stufe 5b
-# ist maschinell abgesichert.
+# Die Nur-Lesen-Voreinstellung von Stufe 5b ist maschinell abgesichert.
 #
-# Der Befund BF-H4: der Dateikopf sagte "SCHREIBT NICHTS", die Modulkonstante
+# Ein frueherer Widerspruch: Der Dateikopf sagte "SCHREIBT NICHTS", die Konstante
 # ENABLE_NOOP_WRITE_PROBE stand auf True. Ein Widerspruch, den nichts bemerkt
 # haette - Stufenskripte waren bis hierher ungetestet, weil sie eine echte
 # Verbindung aufbauen.

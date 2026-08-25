@@ -29,7 +29,7 @@ from .wt3000_core import WTError, WTSession
 
 # Bereichswerte werden ausschliesslich hierueber geformt - dieselbe Funktion,
 # die auch wt3000_rangeio.py benutzt. Am Geraet belegt ist die reine NRf-Form
-# ('1000'); zwei Schreibweisen fuer denselben Knoten waeren Befund B-01.
+# ('1000'); die genaue Knotenschreibweise verhindert mehrdeutige Varianten.
 from .wt3000_common import DEFAULT_ELEMENTS
 from .wt3000_common import canonical_enum_token as _canonical_enum_token
 from .wt3000_common import format_nrf
@@ -323,18 +323,14 @@ SYNC_TOKENS: frozenset[str] = frozenset(s.value.upper() for s in SyncSource)
 MODE_TOKENS: frozenset[str] = frozenset(m.value.upper() for m in MeasMode)
 
 
-# UEBERARBEITET (M2-5-Teil): Die Zuordnungsregel selbst steht seit dem
-# 21.08.2026 in wt3000_common - sie ist geraeteunabhaengig, und das zweite
-# Fachmodul derselben Schicht (wt3000_deviceconfig, ':INTEGrate') braucht sie
-# ebenso. Hier bleibt genau das, was NICHT gemeinsam ist: die Kopfentfernung.
-#
-# Dieses Modul entfernt Koepfe nach der Regel "Wert ist das letzte
+# Die gemeinsame Enum-Regel liegt in wt3000_common. Dieses Modul entfernt
+# davor Koepfe nach der Regel "Wert ist das letzte
 # Whitespace-Token" (strip_header oben), wt3000_common nach der Regel "fuehrt
 # der Text mit ':' und enthaelt ein Leerzeichen, ist der Wert alles danach".
 # Fuer verkettete Antworten ohne fuehrenden Doppelpunkt ('ELEMENT2 OFF')
 # liefern die beiden Unterschiedliches - deshalb bleibt hier ein eigener
 # Einstieg, statt die gemeinsame Funktion direkt zu benutzen. Diese beiden
-# Kopfregeln zusammenzufuehren ist der noch offene Rest von M2-5.
+# Die gemeinsamen Kopfregeln liegen in wt3000_common.
 
 
 def canonical_enum_token(text: str, allowed: frozenset[str]) -> str:
@@ -371,33 +367,8 @@ def _check_allowed(value: float, allowed: tuple[float, ...], what: str) -> float
 # ---------------------------------------------------------------------------
 
 
-# STILLGELEGT, nicht geloescht - offener Punkt ROADMAP M0-1.
-#
-# Die Einheitenschreibweise ist aufgegeben: am Geraet belegt ist die reine
-# NRf-Form (Element 4, Direkteingang, ':INPut:VOLTage:RANGe:ELEMent4 1000'
-# gesetzt und identisch zurueckgelesen). Geformt wird nur noch mit
-# wt3000_common.format_nrf() - siehe den Import am Dateikopf.
-#
-# Die beiden Funktionen bleiben stehen, bis der Geraetetermin auch den Sensor-
-# und den Direktstromknoten bestaetigt hat (M0-1, Spiegelstrich 2 und 3). Faellt
-# dort die Einheitenform doch an, ist sie hier wieder greifbar; sonst ersatzlos
-# entfernen.
-#
-# def format_voltage(volts: float) -> str:
-#     """Spannungsangabe fuer das Geraet ('1000V', '7.5V')."""
-#     return f"{volts:g}V"
-#
-#
-# def format_current(amps: float) -> str:
-#     """Stromangabe. Unter 1 A wird in mA formuliert (Schreibweise Handbuch)."""
-#     if amps < 1.0:
-#         return f"{amps * 1000.0:g}MA"
-#     return f"{amps:g}A"
-
-
-# format_rate() bleibt: ':RATE' ist KEIN Bereichsknoten. Die Zeiteinheit
-# ('500MS' / '1S') gehoert dort zur Parametersyntax und ist von M0-1 nicht
-# beruehrt.
+# Bereiche verwenden die am Geraet belegte reine NRf-Form. ':RATE' ist kein
+# Bereichsknoten; dort gehoert die Zeiteinheit zur Parametersyntax.
 def format_rate(seconds: float) -> str:
     """Update-Rate als Geraeteparameter ('500MS', '1S')."""
     if seconds < 1.0:
@@ -464,10 +435,9 @@ class InputConfig:
         protected_groups: frozenset[str] = DEFAULT_PROTECTED,
         verify: bool = True,
         check_errors: bool = True,
-        # NEU (ROADMAP M1-3, Befund S-01): die bestueckten Elemente.
+        # Bestueckte Elemente; die Fassade liefert sie aus DeviceInfo.
         elements: tuple[int, ...] = DEFAULT_ELEMENTS,
-        # NEU (ROADMAP M1-3, Befund S-01): Rueckruf nach einer Verdrahtungs-
-        # aenderung. Siehe set_wiring().
+        # Rueckruf nach einer Verdrahtungsaenderung; siehe set_wiring().
         on_wiring_changed: Callable[[], None] | None = None,
     ) -> None:
         self._session = session
@@ -480,20 +450,8 @@ class InputConfig:
         self._on_wiring_changed = on_wiring_changed
 
     # -- Geraetebezug -------------------------------------------------------
-    #
-    # NEU (ROADMAP M1-3, Befund S-01). Bis hierher lieferte '_elements_of'
-    # fuer das Ziel 'ALL' die feste Liste (1, 2, 3, 4) - unabhaengig davon,
-    # was am anderen Ende der Leitung steckt. 'RangeAccess' kannte die
-    # bestueckten Elemente laengst; 'InputConfig' nicht. Auf einem
-    # 3-Element-Geraet adressierten die beiden Wege damit unterschiedliche
-    # Ziele, und der bequemere Weg war der schlechtere:
-    #
-    #     wt.ranges.expand_scope("ALL")   -> (1, 2, 3)   richtig
-    #     wt.input._elements_of("ALL")    -> (1, 2, 3, 4) fest verdrahtet
-    #
-    # Die Voreinstellung bleibt DEFAULT_ELEMENTS, damit ein von Hand
-    # gebautes 'InputConfig' sich verhaelt wie bisher. Die Fassade uebergibt
-    # die gelesene Liste - und ab da stimmen beide Wege ueberein.
+    # 'ALL' bezieht sich auf diese Instanz. Die Fassade liefert die gelesene
+    # Bestueckung; DEFAULT_ELEMENTS ist nur die Annahme fuer direkte Nutzung.
 
     @property
     def elements(self) -> tuple[int, ...]:
@@ -503,8 +461,8 @@ class InputConfig:
     def configure_elements(self, elements: tuple[int, ...]) -> None:
         """Elementliste ersetzen - nach einer Verdrahtungsaenderung.
 
-        NEU (ROADMAP M1-3). Bewusst eine Aenderung AM OBJEKT und nicht ein
-        neues Objekt: die Fassade gibt 'wt.input' heraus, und ein Anwender
+        Bewusst eine Aenderung AM OBJEKT und nicht ein neues Objekt: die
+        Fassade gibt 'wt.input' heraus, und ein Anwender
         darf sich die Referenz merken. Ein Austausch hinter seinem Ruecken
         liesse ihn mit dem alten Stand weiterarbeiten - also genau der
         Fehler, den diese Methode beheben soll.
@@ -625,11 +583,8 @@ class InputConfig:
     def _elements_of(self, target: int | str) -> tuple[int, ...]:
         """Elemente ermitteln, die von einem Ziel betroffen sind.
 
-        UEBERARBEITET (ROADMAP M1-3, Befund S-01): 'ALL' loest gegen die
-        bestueckten Elemente auf, und eine Elementnummer wird geprueft statt
-        durchgereicht. Das ist dieselbe Regel, die 'RangeAccess.expand_scope()'
-        seit Schritt 4 (Befund A-03) durchsetzt - sie fehlte hier als
-        einziger Stelle.
+        'ALL' loest gegen die bestueckten Elemente auf; einzelne Nummern
+        werden wie in 'RangeAccess.expand_scope()' geprueft.
 
         Der geprueft-durchgereichte Fall ist nicht theoretisch: ein Kommando
         an ein nicht bestuecktes Element faellt am Geraet nur als Eintrag in
@@ -691,10 +646,7 @@ class InputConfig:
             raise WTError(f"Kein Elementtyp fuer Element {element} bekannt")
         return self._module_cache[element]
 
-    # Die Fassade braucht die Elementtypen als Ganzes, um bestueckte von
-    # unbestueckten Elementen zu unterscheiden. Ohne diese Methode muesste sie
-    # ':INPut:MODUle?' selbst parsen - die vierte Fassung derselben Regel
-    # (Befund B-03).
+    # Die Fassade bekommt alle Elementtypen ohne eigene Parserkopie.
     def get_modules(self) -> dict[int, int]:
         """Elementtypen aller gemeldeten Elemente: {Elementnummer: 30|2|0}.
 
@@ -783,16 +735,7 @@ class InputConfig:
         Mit der Verdrahtung aendert sich, welche Elemente zu welcher
         Wiring-Unit gehoeren und ob SIGMA/SIGMB ueberhaupt existieren.
 
-        UEBERARBEITET (ROADMAP M1-3, Befund S-01): Bis hierher stand an dieser
-        Stelle der Hinweis "alle SIGMA/SIGMB-Kommandos danach sind neu zu
-        bewerten" - ein Auftrag an den Anwender, den er nicht ausfuehren
-        konnte: der Gerätesteckbrief wurde einmal beim Verbinden gelesen, und
-        eine Methode, ihn aufzufrischen, gab es nicht. Nach einer
-        Umverdrahtung lieferte 'wt.ranges.expand_scope("SIGMA")' still die
-        Elemente der ALTEN Verdrahtung, und die naechste Bereichseinstellung
-        traf das falsche Element, ohne dass irgendwo ein Fehler auftrat.
-
-        Deshalb meldet dieses Objekt die Aenderung jetzt selbst - ueber den
+        Das Objekt meldet die Aenderung selbst ueber den
         Rueckruf 'on_wiring_changed', den die Fassade beim Bau setzt und mit
         'WT3000.refresh_device()' beantwortet. Wer 'InputConfig' von Hand baut
         und den Rueckruf weglaesst, ist fuer die Auffrischung weiterhin selbst
@@ -830,8 +773,8 @@ class InputConfig:
         )
         self._module_cache = None
 
-        # NEU (ROADMAP M1-3, Befund S-01): erst schreiben und verifizieren,
-        # dann melden. Ein Rueckruf vor der Rueckleseprobe wuerde die
+        # Erst schreiben und verifizieren, dann melden. Ein Rueckruf vor der
+        # Rueckleseprobe wuerde die
         # abhaengigen Objekte auf einen Zustand ziehen, den das Geraet
         # womoeglich gar nicht angenommen hat.
         if self._on_wiring_changed is not None:
@@ -905,7 +848,7 @@ class InputConfig:
             GROUP_RANGE,
             _BASE_CURR_RANGE,
             target,
-            # ZU VERIFIZIEREN (ROADMAP M0-1): am Geraet belegt ist bisher nur
+            # ZU VERIFIZIEREN: am Geraet belegt ist bisher nur
             # der Spannungsknoten. Fuer den Direktstrom steht die Gegenprobe
             # '5A' gegen '500MA' gegen '0.5' noch aus. Die Rueckleseprobe in
             # _write_element() faengt eine Ablehnung ab.
@@ -929,7 +872,7 @@ class InputConfig:
             _BASE_CURR_RANGE,
             target,
             # Identisch zu wt3000_rangeio.set_range(..., sensor=True).
-            # ZU VERIFIZIEREN (ROADMAP M0-1, Spiegelstrich 2): 'EXTernal,10'
+            # ZU VERIFIZIEREN: 'EXTernal,10'
             # gegen 'EXTernal,10V' ist am Geraet noch nicht gegengeprueft.
             f"EXTernal,{format_nrf(value)}",
             matches,

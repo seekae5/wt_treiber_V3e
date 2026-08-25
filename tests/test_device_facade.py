@@ -1,13 +1,7 @@
 # =============================================================================
 # Datei: tests/test_device_facade.py
-# NEU (ROADMAP M1-1): die Fassade 'WT3000' geraetefrei pruefen.
-#
-# Diese Datei ist der Beleg fuer das Abnahmekriterium aus M1-1 - "ein Anwender
-# baut mit fuenf Zeilen eine Verbindung auf, liest die Konfiguration und
-# trennt sauber wieder". Moeglich ist das erst seit M1-2: die Fassade wird
-# hier auf 'FakeTransport' gesetzt, nicht auf 'FakeSession'. Damit laufen
-# WTSession, Blockparser, Fehlerqueue und Item-Tabelle im Test mit - also
-# genau die Schichten, die eine Fassade zusammenbindet.
+# Geraetefreie Tests der Fassade gegen FakeTransport. Dadurch laufen WTSession,
+# Blockparser, Fehlerqueue und Item-Tabelle als zusammengebundene Schichten mit.
 #
 # 'ItemTableTransport' unten ist ein minimales Geraetemodell: es uebernimmt
 # geschriebene ITEM<n>- und NUMber-Kommandos und beantwortet die Abfragen
@@ -19,16 +13,16 @@ from __future__ import annotations
 
 
 import pytest
-# UEBERARBEITET (Schritt 7): 'base_responses' und 'ItemTableTransport' liegen
+# 'base_responses' und 'ItemTableTransport' liegen
 # jetzt in conftest.py - die Stufenskripte brauchen dasselbe Geraetemodell.
 from conftest import ItemTableTransport, base_responses
 
 from wt3000_scpi import OPTION_REQUIREMENTS, WT3000, WTConfig, WTError
-# NEU (M1-3): die reinen Funktionen der Optionserfassung werden einzeln
+# Die reinen Funktionen der Optionserfassung werden einzeln
 # geprueft, nicht nur ueber die Fassade.
 from wt3000_scpi.wt3000_device import parse_options, required_options
-from wt3000_scpi import wt3000_device  # NEU (P-1): fuer monkeypatch auf TmctlTransport
-from wt3000_scpi.wt3000_core import ReadOnlyViolation, TmctlError  # TmctlError: NEU (P-2)
+from wt3000_scpi import wt3000_device  # fuer monkeypatch auf TmctlTransport
+from wt3000_scpi.wt3000_core import ReadOnlyViolation, TmctlError
 from wt3000_scpi.wt3000_input import ConfigLocked
 from wt3000_scpi.wt3000_itemspec import ItemSpec
 from wt3000_scpi.wt3000_numeric import ValueStatus
@@ -58,7 +52,7 @@ def test_steckbrief_wird_beim_verbinden_erhoben():
 
 
 def test_unbestueckte_elemente_fallen_aus_der_elementliste():
-    """Halber Schritt Richtung M1-3: die Elementliste wird gelesen, nicht gesetzt."""
+    """Die Elementliste wird gelesen, nicht gesetzt."""
     responses = base_responses(wiring="V3A3,NONE", modules="30,30,30,0")
     with open_facade(FakeTransport(responses)) as wt:
         assert wt.device.elements == (1, 2, 3)
@@ -67,7 +61,7 @@ def test_unbestueckte_elemente_fallen_aus_der_elementliste():
 
 
 def test_wiring_units_sind_ohne_zutun_verdrahtet():
-    """Der eigentliche Gewinn von M1-1.
+    """Die Fassade buendelt den vollstaendigen Verbindungsablauf.
 
     Ohne Fassade muss der Aufrufer sigma_members_from_units(...) selbst
     einsetzen - in stage5b fehlt genau das, dort laeuft jeder SIGMA-Scope in
@@ -98,7 +92,7 @@ def test_fehlende_verdrahtung_ist_ein_fehler():
 
 
 # ---------------------------------------------------------------------------
-# Geraeteoptionen (ROADMAP M1-3, Rang 0 aus ANALYSE_FEHLENDE_FUNKTIONEN.md)
+# Geraeteoptionen
 # ---------------------------------------------------------------------------
 #
 # Worum es geht: zehn Kommandogruppen des WT3000 sind an eine verbaute Option
@@ -365,7 +359,7 @@ def test_schreibsitzung_schaltet_remote_ein_und_beim_schliessen_ab():
 
 
 # ---------------------------------------------------------------------------
-# NEU (P-1, siehe PLAN_BEFUNDE_2026-08-19.md): Fernsteuerung beim GESCHEITERTEN
+# Fernsteuerung beim gescheiterten
 # Verbindungsaufbau.
 #
 # Der Fall, den close() strukturell nicht abdecken kann: scheitert der
@@ -382,7 +376,7 @@ WIRING_QUERY = ":INPut:WIRing?"
 
 
 def test_gescheiterter_verbindungsaufbau_gibt_das_bedienfeld_frei():
-    """P-1: REMote ON ohne passendes OFF waere ein gesperrtes Bedienfeld."""
+    """REMote ON ohne passendes OFF waere ein gesperrtes Bedienfeld."""
     transport = FakeTransport(base_responses(), fail_commands={WIRING_QUERY})
 
     with pytest.raises(WTError):
@@ -613,7 +607,7 @@ def test_applied_stellt_auch_nach_einem_fehler_zurueck():
 
 
 # ---------------------------------------------------------------------------
-# NEU (P-2, siehe PLAN_BEFUNDE_2026-08-19.md): misslungene Wiederherstellung.
+# Misslungene Wiederherstellung.
 #
 # 'applied()' verspricht "Ausgangszustand garantiert zurueck". Bisher wurde ein
 # Fehler im Restore nur protokolliert und dann verschluckt - der Aufrufer
@@ -657,7 +651,7 @@ class IgnoringItemTransport(ItemTableTransport):
 
 
 def test_misslungener_restore_wird_gemeldet_statt_verschluckt():
-    """P-2: der Kern des Befunds BF-H2."""
+    """Der Wiederherstellungsfehler darf nicht verloren gehen."""
     transport = BreakableItemTransport(three_items(), number=3)
     specs = [ItemSpec("U", "1"), ItemSpec("I", "1"), ItemSpec("P", "1"), ItemSpec("U", "SIGMA")]
 

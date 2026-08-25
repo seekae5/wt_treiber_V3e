@@ -13,8 +13,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-# UEBERARBEITET (Punkt 4, src-Layout): paketrelative Importe.
-from .wt3000_common import canonical_element  # UEBERARBEITET (F-04)
+from .wt3000_common import canonical_element
 from .wt3000_core import DeviceError, WTError, WTSession
 from .wt3000_numeric import ItemTable, NumericItem
 
@@ -71,8 +70,6 @@ def build_item_table(specs: tuple[ItemSpec, ...] | list[ItemSpec]) -> ItemTable:
 
 # ---------------------------------------------------------------------------
 # Vergleichsregeln
-# UEBERARBEITET (F-03, siehe AENDERUNGEN_2026-08-18.md): dieser Kommentarkopf
-# stand zweimal unmittelbar hintereinander - die Dublette ist entfernt.
 # ---------------------------------------------------------------------------
 
 
@@ -91,13 +88,7 @@ def _functions_compatible(requested: str, actual: str) -> bool:
     return req == act or req.startswith(act)
 
 
-# UEBERARBEITET (F-04, siehe AENDERUNGEN_2026-08-18.md): Die Regel stand hier
-# als vollstaendige Zweitfassung von wt3000_common.canonical_element() - Zeile
-# fuer Zeile identisch. Zwei Kopien derselben SIGMA/SIGMB-Regel sind genau die
-# Konstellation, aus der der urspruengliche Vertauscher entstanden ist: eine
-# Kopie wird korrigiert, die andere nicht. Der Name bleibt als duenne
-# Weiterleitung bestehen, damit bestehende Aufrufer und Tests unveraendert
-# funktionieren; die Regel selbst liegt jetzt nur noch in wt3000_common.
+# Kompatibilitaetsname; die gemeinsame Regel liegt in wt3000_common.
 def _canonical_element(element: str | None) -> str:
     """Elementangabe auf ein eindeutiges Token normalisieren.
 
@@ -207,13 +198,6 @@ def load_backup_bundle(path: Path) -> tuple[ItemTable, list[NumericItem]]:
 # ---------------------------------------------------------------------------
 
 
-# UEBERARBEITET (F-09, siehe AENDERUNGEN_2026-08-18.md): hiess bis hierher
-# 'probe_write_capability' - genau wie die gleichnamige Funktion in
-# wt3000_ranging.py, die etwas voellig anderes tut (sie schreibt einen
-# MESSBEREICH). Zwei gleich benannte Funktionen mit verschiedener Wirkung sind
-# in einer Bibliothek eine Stolperfalle: ein vertauschter Import haette hier
-# eine Item-Tabelle veraendert, wo ein Bereich gemeint war. Beide tragen jetzt
-# den Namen ihres Gegenstands.
 def probe_item_write_capability(
     session: WTSession, target: ItemTable, backup: ItemTable
 ) -> None:

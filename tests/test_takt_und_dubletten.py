@@ -1,8 +1,8 @@
 # =============================================================================
 # Datei: tests/test_takt_und_dubletten.py
-# NEU (ROADMAP M3-3): Taktkopplung und Dublettenerkennung.
+# Taktkopplung und Dublettenerkennung.
 #
-# Der Befund, der dazu gefuehrt hat, war gerätefrei reproduzierbar: bei
+# Der zugrunde liegende Fehler ist geraetefrei reproduzierbar: Bei
 # ':RATE 2 s' und 'interval_s=0.1' lieferte die Messschleife vier Datensaetze,
 # alle mit SampleMark.OK, alle mit identischen Werten - und keine einzige
 # Warnung. Die entstandene Datei sah aus wie eine Messreihe mit zwanzigfacher

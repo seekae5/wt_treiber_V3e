@@ -1,23 +1,8 @@
 # =============================================================================
 # Datei: tests/test_condition_parser.py
-# NEU (Schritt 5b aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-06): rohes int()
-# und float() auf Geraeteantworten sind uebersetzt.
-#
-# Der Befund A-06: an sechs Stellen wurde eine Geraeteantwort direkt an int()
-# oder float() gegeben. 'wt3000_common' haelt fuer genau diesen Zweck
-# 'parse_nr3()' bereit - es entfernt einen etwaigen Kommandokopf und macht aus
-# einem ValueError einen WTError mit Kontext. Keine der sechs Stellen benutzte
-# es.
-#
-# Antwortet das Geraet auf ':STATus:CONDition?' unerwartet - mit Header (weil
-# jemand ':COMMunicate:HEADer 1' gesetzt hat), leer, oder mit einer
-# Mehrfachantwort -, verliess ein ValueError die Kette. Er passierte
-# 'except WTError' in allen sieben Skripten.
-#
-# Die kritischste der sechs Stellen ist wt3000_measure: sie liegt INNERHALB der
-# laufenden Messschleife. Ein ValueError dort beendet eine womoeglich
-# stundenlange Messreihe mit einem Traceback statt mit dem sauberen Abbruch,
-# fuer den _loop_body sonst gebaut ist.
+# Parsertests fuer numerische Geraeteantworten. Header, leere oder mehrteilige
+# Antworten muessen als WTError mit Kontext erscheinen, besonders innerhalb
+# einer laufenden Messschleife.
 #
 # UEBER DIE ANALYSE HINAUS: beim Anfassen dieser sechs Stellen faellt auf, dass
 # die AUSWERTUNG der Condition-Bits viermal im Bestand liegt - stage2, stage3,

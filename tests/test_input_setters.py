@@ -1,7 +1,7 @@
 # =============================================================================
 # Datei: tests/test_input_setters.py
-# NEU (F-05, siehe AENDERUNGEN_2026-08-18.md): Regressionstests fuer den
-# Eingang von set_sync_source() und set_voltage_mode()/set_current_mode().
+# Regressionstests fuer set_sync_source() und
+# set_voltage_mode()/set_current_mode().
 #
 # Hintergrund: Die Korrektur zu INPUT-13 hatte Vergleich (diff) und
 # Wiederherstellung (restore) auf EINE Regel gebracht - enum_match(). Der

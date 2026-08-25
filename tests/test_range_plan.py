@@ -1,11 +1,10 @@
 # =============================================================================
 # Datei: tests/test_range_plan.py
-# NEU (Punkt 3, TOOLS-2): RangePlan.validate() - Konflikte werden nach
-# Aufloesung der Scopes und VOR dem ersten Set-Kommando erkannt.
+# RangePlan.validate(): Konflikte werden nach Aufloesung der Scopes und vor
+# dem ersten Set-Kommando erkannt.
 #
-# Zusaetzlich abgedeckt: parse_range_value()/ranges_match() aus der Korrektur
-# zu RANGEIO-2, weil validate() seit dieser Aenderung auch die Eingangsart
-# prueft und beides sonst nur zusammen faellt.
+# parse_range_value()/ranges_match() sichern zusaetzlich den Vergleich der
+# Eingangsart ab.
 # =============================================================================
 
 from __future__ import annotations

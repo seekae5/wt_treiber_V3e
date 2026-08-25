@@ -14,10 +14,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-# UEBERARBEITET (Punkt 4, src-Layout): paketrelative Importe.
-# Start ab jetzt ueber 'python -m wt3000_scpi.stage4_measure' - ein direkter
-# Aufruf der Datei kann relative Importe nicht aufloesen.
-from .wt3000_common import (  # UEBERARBEITET (F-08)
+# Paketmodule werden mit 'python -m wt3000_scpi.stage4_measure' gestartet.
+from .wt3000_common import (
     condition_warnings,
     output_dir,
     parse_condition,
@@ -35,7 +33,7 @@ from .wt3000_itemspec import (
     apply_item_table,
     build_item_table,
     probe_extra_items,
-    probe_item_write_capability,  # UEBERARBEITET (F-09)
+    probe_item_write_capability,
     restore_item_table,
     save_backup_bundle,
     verify_item_table,
@@ -45,8 +43,6 @@ from .wt3000_measure import (
     run_measurement_loop,
     write_metadata,
 )
-# UEBERARBEITET (ROADMAP M4-2): CsvRecorder heisst CsvSink und wohnt jetzt bei
-# den uebrigen Ausgabeformaten.
 from .wt3000_sinks import CsvSink
 from .wt3000_numeric import ItemTable, NumericItem
 
@@ -77,20 +73,10 @@ LOG_EVERY: int = 10
 CSV_DELIMITER: str = ","
 
 # Zielverzeichnis fuer CSV, Metadaten, Backup und Protokoll.
-# UEBERARBEITET: Ablage an der Projektwurzel statt an 'Path.cwd()'.
-# Bis hierher hing das am Arbeitsverzeichnis - ein Start aus einem
-# Unterverzeichnis (Entwicklungsumgebungen tun das standardmaessig) legte
-# ein zweites gleichnamiges Verzeichnis dort an. Siehe
-# wt3000_common.output_dir().
 OUTPUT_DIR: Path = output_dir("messungen")
 
 # Freitext, landet in der Metadatendatei.
 RUN_COMMENT: str = ""
-
-
-# UEBERARBEITET (F-08, siehe AENDERUNGEN_2026-08-18.md): setup_logging() lag in
-# allen fuenf Stufenskripten als byteweise identische Kopie. Es gibt sie jetzt
-# nur noch einmal, in wt3000_common.py; hier wird sie importiert.
 
 
 def check_preconditions(session: WTSession) -> None:
@@ -105,7 +91,6 @@ def check_preconditions(session: WTSession) -> None:
     if not fmt.upper().startswith("FLO"):
         raise WTError(f":NUMeric:FORMat ist {fmt!r}, erwartet 'FLO'")
 
-    # UEBERARBEITET (Schritt 5b, Befund A-06): parse_nr3() statt float().
     rate = parse_nr3(session.query(":RATE?"), ":RATE")
     if SAMPLE_INTERVAL_S < rate:
         log.warning(
@@ -115,11 +100,7 @@ def check_preconditions(session: WTSession) -> None:
             rate,
         )
 
-    # UEBERARBEITET (Schritt 5b aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund
-    # A-06): parse_condition() statt int() - ein ValueError aus einer
-    # unerwarteten Antwort passierte 'except WTError' unbemerkt. Die
-    # Auswertung der Bits liegt seit S-02 einmal in wt3000_common; diese
-    # Stelle war die einzige vollstaendige und ist die Vorlage.
+    # Gemeinsamer Parser liefert WTError und deckt alle bekannten Bits ab.
     for meldung in condition_warnings(parse_condition(session.query(":STATus:CONDition?"))):
         log.warning("%s", meldung)
 
@@ -148,25 +129,8 @@ def main() -> int:
     exit_code = 0
 
     try:
-        # UEBERARBEITET (Schritt 3 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund
-        # A-08): die Aufloesungskette steht jetzt INNERHALB des try und HINTER
-        # setup_logging(). Bis hierher war sie der erste Aufruf von Layer 4 nach
-        # Layer 0 - und der einzige, der ausserhalb jeder Absicherung und vor
-        # der Einrichtung des Protokolls lag.
-        #
-        # Sie kann drei WTError werfen: nicht lesbare Datei, kein JSON-Objekt,
-        # nicht auswertbarer Feldwert. Eine kaputte 'wt3000.json' - der
-        # haeufigste Konfigurationsfehler ueberhaupt - endete deshalb als
-        # Traceback statt mit der Zeile "Abbruch: ...", der Rueckgabewert 1 kam
-        # aus dem Traceback statt aus dem Skript, und in der Protokolldatei
-        # stand nichts, weil es sie noch nicht gab.
-        #
-        # Die Umstellung kostet nichts: der Name der Protokolldatei haengt nur
-        # an OUTPUT_DIR und am Zeitstempel, nicht an der Konfiguration. Die
-        # bisherige Reihenfolge war historisch, nicht sachlich.
-        #
-        # config_file_in_use() steht VOR from_environment(), damit die kaputte
-        # Datei auch dann benannt ist, wenn das Lesen scheitert.
+        # Herkunft vor dem Lesen protokollieren; so bleibt auch fehlerhaftes
+        # JSON einem konkreten Pfad zuordenbar.
         log.info("Konfigurationsdatei: %s", config_file_in_use() or "<keine, Voreinstellungen>")
         config = WTConfig.from_environment()
         log.info("Verbindung: %s", config.describe())
@@ -217,11 +181,7 @@ def main() -> int:
                         },
                     )
 
-                    # 4) Messschleife.
-                    # UEBERARBEITET (ROADMAP M4-2): Spaltenkopf und Lebenszyklus der
-                    # Senke liegen jetzt in der Schleife - hier wird sie nur gebaut.
-                    # Ein anderes Ausgabeformat waere an dieser Stelle ein anderer
-                    # Klassenname und sonst nichts.
+                    # 4) Messschleife. Sie verwaltet Kopf und Lebenszyklus der Senke.
                     log.info("Start der Messung. Abbruch jederzeit mit Strg+C.")
                     stats = run_measurement_loop(
                         session=session,
@@ -265,28 +225,12 @@ def main() -> int:
                             )
                             exit_code = 1
             finally:
-                # UEBERARBEITET (Schritt 1 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-01):
-                # eigenes 'finally' um den gesamten Nutzteil. Vorher stand dieser Aufruf
-                # im RUMPF des Wiederherstellungs-finally, hinter einem 'except WTError'.
-                # Jede andere Ausnahme - ein KeyError aus dem Restore, ein Strg+C -
-                # uebersprang ihn und lief aus dem 'with TmctlTransport(...)' heraus: der
-                # Transport war dann zu, ':COMMunicate:REMote OFF' nicht mehr moeglich,
-                # das Bedienfeld blieb gesperrt. Der Anwender musste am Geraet LOCAL
-                # druecken.
-                #
-                # Das ist die Fassung, die Stufe 2 seit F-07 hat. Sie ist gefahrlos, weil
-                # disable_remote() selbst idempotent ist (WTSession._remote_active) und
-                # WTError intern abfaengt - der Aufruf kann eine gerade laufende Ausnahme
-                # also nicht verdraengen.
+                # Eigenes finally fuer den gesamten Nutzteil: REMOTE muss auch
+                # bei unerwarteten Ausnahmen vor dem Schliessen geloest werden.
                 session.disable_remote()
 
     except WTError as error:
-        # UEBERARBEITET (Schritt 3, Befund A-08): "Verbindungsfehler" stimmt
-        # nicht mehr - seit die Aufloesungskette in diesem try liegt, faengt
-        # dieser Zweig auch eine kaputte 'wt3000.json'. Das ist kein
-        # Verbindungsfehler, und die Meldung schickte damit in die Irre.
-        # "Abbruch" ist ausserdem das Wort, das die uebrigen fuenf Skripte an
-        # dieser Stelle schon benutzten.
+        # Umfasst Verbindungs- und Konfigurationsfehler.
         log.error("Abbruch: %s", error)
         if backup is not None:
             log.error("Backup liegt unter: %s", backup_file)

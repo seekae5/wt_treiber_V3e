@@ -1,32 +1,6 @@
-# =============================================================================
-# Datei: wt3000_transport.py
-# NEU (ROADMAP M1-2): Layer 0 - Transport.
-#
-# Hintergrund. Bis hierher war 'TmctlTransport' fest in 'wt3000_core' verdrahtet:
-# 'ctypes.WinDLL' und 'os.add_dll_directory' machten den Treiber auf Windows
-# festgenagelt, und 'WTSession' liess sich ohne Geraet gar nicht pruefen - die
-# Testsuite setzte erst eine Ebene darueber mit 'FakeSession' an. Damit blieben
-# genau die Regeln ungetestet, die WTSession selbst durchsetzt: Query-Regeln,
-# Blockdaten-Zusammenbau, Fehlerqueue, Nur-Lesen-Sperre.
-#
-# Dieses Modul ist die unterste Schicht und importiert deshalb NICHTS aus dem
-# Paket. Alles, was ein Transport zum Arbeiten braucht - Verbindungsparameter
-# und die Fehlerklassen, die er selbst wirft - liegt hier. 'wt3000_core'
-# reicht diese Namen unveraendert weiter, damit bestehende Importe der Form
-#     from .wt3000_core import WTConfig, TmctlError
-# wortgleich weiterfunktionieren.
-#
-# Inhalt:
-#   Transport        typing.Protocol - der Vertrag, den WTSession voraussetzt
-#   TmctlTransport   Yokogawa-TMCTL-DLL ueber Ethernet (aus wt3000_core hierher
-#                    verschoben, inhaltlich unveraendert)
-#   FakeTransport    beantwortet Kommandos aus einer Tabelle, merkt sich
-#                    Geschriebenes, bildet Blockdaten und Fehlerqueue nach
-#   float_block()    Hilfsfunktion: Messwerte in einen '#4NNNN'-Block giessen
-#
-# Bewusst NICHT gebaut, aber als Fuge offengelassen (siehe unten):
-#   SocketTransport (VXI-11 / Raw-Socket), VisaTransport (pyvisa).
-# =============================================================================
+# Unterste, paketunabhaengige Transportschicht. Transport beschreibt den
+# Vertrag fuer WTSession; TmctlTransport bindet die Windows-DLL an und
+# FakeTransport bildet Leitung, Blockdaten und Fehlerqueue fuer Tests nach.
 
 from __future__ import annotations
 
@@ -42,8 +16,6 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol, runtime_checkable
 
-# UEBERARBEITET (M1-2): aus wt3000_core hierher verschoben - beides sind
-# Eigenschaften des Transports, nicht der Protokollschicht.
 # TMCTL-Konstante fuer Ethernet-Transport (aus tmctl.h)
 TM_CTL_ETHER: int = 4
 
@@ -53,8 +25,6 @@ MAX_PROGRAM_MESSAGE_BYTES: int = 1024
 
 # ---------------------------------------------------------------------------
 # Verbindungsparameter
-# UEBERARBEITET (M1-2): aus wt3000_core hierher verschoben. Ein Transport muss
-# ohne die Protokollschicht konstruierbar sein, sonst zeigt der Import nach oben.
 # ---------------------------------------------------------------------------
 
 
@@ -77,11 +47,8 @@ class WTConfig:
     deshalb NICHT verbindungsfaehig; es ist der Ausgangspunkt, auf den die
     Auflaesungskette ihre Werte legt.
 
-    Hintergrund (Befund BF-M2): hier standen bis P-7 eine feste Labor-IP, ein
-    Benutzername mit Passwort und ein DLL-Pfad aus dem Benutzerverzeichnis
-    eines bestimmten Rechners. Auf jedem zweiten Rechner war der Treiber damit
-    nur durch Quelltextaenderung benutzbar, und die Zugangsdaten lagen in der
-    Versionsverwaltung.
+    Verbindungsdaten gehoeren in Parameter, Umgebung oder Konfigurationsdatei,
+    nicht als rechner- oder laborspezifische Werte in den Quelltext.
     """
 
     #: Pfad ODER blosser Dateiname. Ein blosser Name wird von Windows selbst
@@ -97,15 +64,8 @@ class WTConfig:
     timeout_ms: int = 5000
     drain_timeout_ms: int = 500
     read_buffer_size: int = 64 * 1024
-    # ZU VERIFIZIEREN: Ob das Geraet Set-Kommandos ueber Ethernet auch ohne
-    # ':COMMunicate:REMote ON' annimmt. Offener Punkt der ROADMAP: M0-3.
-    #
-    # Daran haengt ROADMAP M3-2: dessen Kommandos (':INTEGrate:STARt/:STOP/
-    # :RESet', '*CLS', '*OPC?') sind saemtlich Set-Kommandos und laufen nur
-    # mit read_only=False. Stellt sich use_remote=True als noetig heraus,
-    # sperrt jeder Integrationslauf zusaetzlich das Bedienfeld - bei einer
-    # Wh-Messung ueber Stunden ist das eine bewusste Entscheidung und gehoert
-    # an der Aufrufstelle dokumentiert, nicht als Nebenwirkung hier.
+    # REMOTE kann fuer Set-Kommandos erforderlich sein und sperrt zugleich das
+    # Bedienfeld. Lange Integrationslaeufe sollten diese Wirkung dokumentieren.
     use_remote: bool = True
 
     # -- Auflaesungskette ---------------------------------------------------
@@ -129,13 +89,6 @@ class WTConfig:
         '~/wt3000.json'. Die erste vorhandene gewinnt; fehlt sie ueberall,
         ist das kein Fehler.
 
-        UEBERARBEITET: Die Suche nach oben ist neu - vorher wurde nur im
-        Arbeitsverzeichnis selbst nachgesehen. Wer ein Skript aus einem
-        Unterverzeichnis startete (Entwicklungsumgebungen tun das
-        standardmaessig), bekam "Keine IP-Adresse gesetzt", obwohl die Datei
-        in der Projektwurzel lag. Die vollstaendige Liste liefert
-        'config_search_paths()'.
-
         Umgebungsvariablen heissen wie das Feld in Grossschrift mit Praefix:
         WT3000_IP, WT3000_DLL_PATH, WT3000_USER, WT3000_PASSWORD,
         WT3000_TIMEOUT_MS, WT3000_USE_REMOTE, ...
@@ -157,22 +110,8 @@ class WTConfig:
     def describe(self) -> str:
         """Kurzform fuer Protokolle - OHNE Passwort.
 
-        UEBERARBEITET (Schritt 3 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund
-        A-08/A-09): 'use_remote' und 'timeout_ms' sind dazugekommen.
-
-        Die Zeile wird seit Schritt 3 von allen sieben ausfuehrbaren Skripten
-        in den Protokollkopf geschrieben - sie ist damit die Antwort auf die
-        Frage, gegen welches Geraet und mit welchen Parametern ein archivierter
-        Lauf stattgefunden hat. Ohne 'use_remote' beantwortete sie genau die
-        Frage nicht, die am meisten wiegt: der Wert entscheidet, ob das
-        Bedienfeld waehrend des Laufs gesperrt ist, kommt aus der Umgebung oder
-        aus 'wt3000.json' und ist am Aufruf nicht abzulesen (A-09). Fuer eine
-        Integrationsmessung ueber Stunden ist das die Entscheidung, die der
-        Kommentar an 'use_remote' selbst als "an der Aufrufstelle zu
-        dokumentieren" bezeichnet.
-
-        Das Passwort bleibt ausgenommen. Ein Protokoll wird archiviert und
-        weitergereicht; es ist der falsche Ort fuer Zugangsdaten.
+        Die Angabe umfasst auch Timeout und REMOTE-Zustand, damit archivierte
+        Laeufe nachvollziehbar bleiben. Zugangsdaten gehoeren nicht ins Log.
         """
         anmeldung = f", Benutzer {self.user}" if self.user else ", ohne Anmeldung"
         return (
@@ -229,19 +168,9 @@ def config_search_paths(config_file: "str | Path | None" = None) -> list[Path]:
     Oeffentlich, weil eine Fehlermeldung sie aufzaehlen koennen muss: "keine
     IP gesetzt" ist ohne die Liste der durchsuchten Orte kaum zu beheben.
 
-    UEBERARBEITET: Gesucht wurde bis hierher nur in 'Path.cwd()' - im
-    Arbeitsverzeichnis also, nicht im Projekt. Das hat die beiden Skripte
-    unter tools/hardware/ ausgebremst: Entwicklungsumgebungen starten ein
-    Skript ueblicherweise in SEINEM Verzeichnis, und dort liegt keine
-    'wt3000.json'. Herausgekommen ist die Meldung "Keine IP-Adresse gesetzt",
-    obwohl die Datei einen Sprung weiter oben lag und beim Start aus der
-    Projektwurzel dieselbe Datei anstandslos gefunden wurde.
-
-    Ab jetzt wird vom Arbeitsverzeichnis aus nach OBEN gesucht, bis zur
-    Wurzel des Dateisystems - dieselbe Regel, nach der git sein '.git' und
-    Werkzeuge ihre 'pyproject.toml' finden. Die naechstgelegene Datei
-    gewinnt; damit kann ein Unterverzeichnis weiterhin eine eigene
-    Konfiguration mitbringen, ohne dass das Projekt eine braucht.
+    Vom Arbeitsverzeichnis wird bis zur Dateisystemwurzel gesucht. Die
+    naechstgelegene Datei gewinnt; ein Unterverzeichnis darf daher eine eigene
+    Konfiguration mitbringen.
     """
     kandidaten: list[Path] = []
     if config_file is not None:
@@ -284,30 +213,9 @@ def _config_file_path(config_file: "str | Path | None") -> "Path | None":
 def config_file_in_use(config_file: "str | Path | None" = None) -> "Path | None":
     """Die Konfigurationsdatei, die 'from_environment()' tatsaechlich liest.
 
-    NEU (Schritt 3 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-08/A-10).
-
-    Gegenstueck zu 'config_search_paths()', das alle Kandidaten aufzaehlt:
-    diese Funktion nennt den EINEN, der gewinnt - oder None, wenn keine Datei
-    existiert und die Voreinstellungen greifen.
-
-    Oeffentlich aus demselben Grund wie 'config_search_paths()': ein Protokoll
-    muss die Herkunft nennen koennen. Befund A-10 beschreibt, warum das mehr
-    als Kosmetik ist - 'config_search_paths()' sucht aufwaerts nach
-    'wt3000.json', 'find_project_root()' aufwaerts nach 'pyproject.toml' ODER
-    '.git' ODER 'wt3000.json'. Im Normalfall ist das dasselbe Verzeichnis; wird
-    ein Skript aus einem Unterprojekt mit eigener 'pyproject.toml' gestartet,
-    liest es die Konfiguration von weiter oben und legt die Ausgabe weiter
-    unten ab. Stehen beide aufgeloesten Pfade im Protokollkopf, faellt genau
-    das auf.
-
-    Ohne diese Funktion muesste ein Stufenskript '_config_file_path()' benutzen
-    - einen privaten Namen aus Layer 0, also genau die Sorte Zugriff, die die
-    Schichtung verhindern soll.
-
-    Die Datei wird NICHT gelesen. Waere es anders, meldete ein Syntaxfehler
-    sich zweimal - einmal hier und einmal in 'from_environment()' -, und die
-    Protokollzeile, die die Herkunft nennen soll, braeche selbst ab. Genau
-    diese Zeile wird aber gebraucht, um die kaputte Datei zu benennen.
+    Gegenstueck zu 'config_search_paths()': Rueckgabe ist der gewinnende Pfad
+    oder None. Die Datei wird dabei nicht gelesen, damit der Herkunftshinweis
+    auch bei fehlerhaftem JSON verfuegbar bleibt.
     """
     return _config_file_path(config_file)
 
@@ -341,23 +249,8 @@ def _config_file_values(config_file: "str | Path | None") -> dict[str, object]:
         if feld in bekannt
     }
 
-    # UEBERARBEITET: Ein relativer 'dll_path' AUS DER DATEI gilt relativ zu
-    # dieser Datei, nicht zum Arbeitsverzeichnis.
-    #
-    # 'wt3000.json' in der Projektwurzel traegt "tools/tmctl64.dll". Aus der
-    # Wurzel heraus gestartet ging das gut; aus tools/hardware/ heraus suchte
-    # ctypes nach 'tools/hardware/tools/tmctl64.dll' und der Lauf brach mit
-    # "TMCTL-DLL nicht gefunden" ab - derselbe Startverzeichnis-Fehler wie bei
-    # der Suche nach der Datei selbst, nur eine Ebene spaeter.
-    #
-    # Dateirelativ ist zugleich die uebliche Bedeutung: wer einen Pfad in eine
-    # Konfigurationsdatei schreibt, meint ihn von dort aus. Umgebungsvariable
-    # und ausdruecklicher Parameter behalten ihre Bedeutung (relativ zum
-    # Arbeitsverzeichnis) - sie kommen ja auch von dort.
-    #
-    # Ein blosser Dateiname ('tmctl64.dll') bleibt unangetastet: den soll
-    # Windows selbst in PATH suchen, und ein Verzeichnis davorzusetzen wuerde
-    # genau das verhindern.
+    # Pfade aus der Datei gelten relativ zu ihr. Ein blosser DLL-Dateiname
+    # bleibt unangetastet, damit Windows ihn ueber PATH suchen kann.
     roher_pfad = werte.get("dll_path")
     if isinstance(roher_pfad, str) and roher_pfad:
         kandidat = Path(roher_pfad)
@@ -402,11 +295,6 @@ def resolve_dll_path(dll_path: str) -> "str | Path":
 
 # ---------------------------------------------------------------------------
 # Fehlerklassen des Transports
-# UEBERARBEITET (M1-2): aus wt3000_core hierher verschoben. Diese drei Klassen
-# wirft der Transport selbst; die sitzungsnahen Klassen (DeviceError,
-# ReadOnlyViolation) bleiben in wt3000_core. 'wt3000_core' importiert sie hier
-# und exportiert sie unveraendert weiter - die Klassenidentitaet bleibt also
-# erhalten, 'except WTError' faengt weiterhin alles.
 # ---------------------------------------------------------------------------
 
 
@@ -429,7 +317,7 @@ class ProtocolError(WTError):
 
 
 # ---------------------------------------------------------------------------
-# NEU (M1-2): der Vertrag
+# Transportvertrag
 # ---------------------------------------------------------------------------
 
 
@@ -464,8 +352,6 @@ class Transport(Protocol):
 
 # ---------------------------------------------------------------------------
 # TMCTL-Transport
-# UEBERARBEITET (M1-2): unveraendert aus wt3000_core hierher verschoben.
-# Einzige inhaltliche Aenderung: der Docstring nennt jetzt das Protocol.
 # ---------------------------------------------------------------------------
 
 
@@ -488,11 +374,8 @@ class TmctlTransport:
         self._open = False
 
         if not config.ip:
-            # UEBERARBEITET: Die Meldung nannte die drei Wege, aber nicht die
-            # Orte. Genau daran haengt der haeufigste Fall: die Datei EXISTIERT,
-            # nur nicht dort, wo gesucht wurde - weil das Skript aus einem
-            # Unterverzeichnis heraus gestartet wurde. Ohne die Liste sieht das
-            # aus wie "Datei wird ignoriert" statt wie "woanders gesucht".
+            # Die Suchorte gehoeren in die Meldung, weil eine vorhandene Datei
+            # sonst leicht wie eine ignorierte Datei wirkt.
             gesucht = "\n".join(f"    {p}" for p in config_search_paths())
             raise WTError(
                 "Keine IP-Adresse gesetzt. WTConfig() allein ist nicht "
@@ -504,19 +387,8 @@ class TmctlTransport:
 
         dll = resolve_dll_path(config.dll_path)
 
-        # UEBERARBEITET (Schritt 5a aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund
-        # A-04): der Ladeteil uebersetzt seine Fehler jetzt in WTError.
-        #
-        # 'resolve_dll_path()' oben war schon sorgfaeltig - es nennt alle drei
-        # Abhilfen. Die beiden Zeilen danach waren es nicht, und sie decken die
-        # HAEUFIGEREN Faelle ab: fehlende abhaengige DLL, falsche Bitness, ein
-        # Verzeichnis, das es nicht mehr gibt. Alle sieben ausfuehrbaren
-        # Skripte fangen ausschliesslich WTError; ein OSError von hier lief an
-        # ihnen vorbei, 'raise SystemExit(main())' wurde nicht erreicht, und der
-        # Rueckgabewert 1 kam aus dem Traceback statt aus dem Skript.
-        #
-        # Massstab fuer die Meldungsqualitaet ist resolve_dll_path(): sagen,
-        # was nicht ging UND was zu tun ist.
+        # Plattform- und Ladefehler in die gemeinsame Treiberfehlerklasse
+        # uebersetzen und mit konkreten Abhilfen ergaenzen.
         try:
             # Abhaengige DLLs liegen ueblicherweise im selben Verzeichnis. Bei
             # einem blossen Dateinamen gibt es kein Verzeichnis, das man
@@ -563,13 +435,8 @@ class TmctlTransport:
     def _initialize(self) -> None:
         """Verbindung aufbauen. Adressstring hat das Format 'ip,user,password'."""
         cfg = self._config
-        # UEBERARBEITET (Schritt 5a, Befund A-04): TMCTL nimmt den Adressstring
-        # als ASCII entgegen. Ein Umlaut im Passwort - nicht abwegig, wenn die
-        # Zugangsdaten aus 'wt3000.json' kommen - brach den Verbindungsaufbau
-        # vorher mit einem nackten UnicodeEncodeError ab.
-        #
-        # Die Meldung nennt das FELD, nicht den Wert: sie landet seit Schritt 3
-        # in der Protokolldatei, und die wird archiviert und weitergereicht.
+        # TMCTL erwartet ASCII. Die Fehlermeldung nennt aus Datenschutzgruenden
+        # nur das betroffene Feld, nicht dessen Wert.
         for feld, wert in (("ip", cfg.ip), ("user", cfg.user), ("password", cfg.password)):
             try:
                 wert.encode("ascii")
@@ -608,10 +475,7 @@ class TmctlTransport:
         (verifiziert mit '*IDN?').
         ZU VERIFIZIEREN: Verhalten bei mit ';' verketteten Kommandos.
         """
-        # UEBERARBEITET (Schritt 5a, Befund A-04): ein Nicht-ASCII-Zeichen im
-        # Kommando - typischerweise ueber einen Parameter aus einer
-        # Konfigurationsdatei - warf einen nackten UnicodeEncodeError an allen
-        # 'except WTError' vorbei.
+        # Kodierungsfehler als ProtocolError an die gemeinsame API uebersetzen.
         try:
             payload = command.encode("ascii")
         except UnicodeEncodeError as exc:
@@ -673,9 +537,8 @@ class TmctlTransport:
     ) -> None:
         self.close()
 
-
 # ---------------------------------------------------------------------------
-# NEU (M1-2): Ersatzgeraet fuer die Testsuite
+# Ersatzgeraet fuer die Testsuite
 # ---------------------------------------------------------------------------
 
 # Was in der Antworttabelle stehen darf. Ein Callable bekommt das Kommando in
@@ -732,7 +595,7 @@ class FakeTransport:
 
     fail_commands
         Kommandos, die einen TmctlError ausloesen - der simulierte
-        Verbindungsabbruch fuer 'drain_after_failure()' und spaeter M3-4.
+        Verbindungsabbruch fuer 'drain_after_failure()'.
 
     written
         Protokoll aller gesendeten Programmnachrichten in Reihenfolge.
@@ -878,16 +741,3 @@ class FakeTransport:
         tb: TracebackType | None,
     ) -> None:
         self.close()
-
-
-# ---------------------------------------------------------------------------
-# Offene Fugen (ROADMAP M1-2, bewusst nicht gebaut)
-# ---------------------------------------------------------------------------
-#
-# class SocketTransport:
-#     """VXI-11 bzw. Raw-Socket ueber Port 10001 - ohne TMCTL-DLL und ohne
-#     Windows. Erst bauen, wenn eine Messaufgabe es verlangt; das Protocol
-#     oben ist die einzige Stelle, an der es andocken muss."""
-#
-# class VisaTransport:
-#     """pyvisa-Anbindung ('TCPIP::<ip>::INSTR'). Gleiche Begruendung."""

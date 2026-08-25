@@ -1,7 +1,6 @@
 # =============================================================================
 # Datei: tests/test_input_snapshot.py
-# NEU (Punkt 3, TOOLS-2): InputSnapshot.diff() und die eine Vergleichsregel
-# aus der Korrektur zu INPUT-13.
+# Tests fuer InputSnapshot.diff() und seine gemeinsame Vergleichsregel.
 #
 # diff() entscheidet, ob eine Wiederherstellung noetig ist, UND ob sie als
 # gelungen gilt. Solange Vergleich und Wiederherstellung verschiedene Regeln

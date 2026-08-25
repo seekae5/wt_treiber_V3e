@@ -1,12 +1,7 @@
 # =============================================================================
 # Datei: tests/test_package_layout.py
-# NEU (Punkt 4, src-Layout): haelt fest, was die Umstellung garantieren soll.
-#
-# Der Klon unter 'Build/' entstand, weil das Packaging-Skelett und die
-# Arbeitskopie getrennt gepflegt wurden. Diese Tests sichern die Eigenschaften
-# ab, die dabei auseinandergelaufen sind: dass alle Module importierbar sind,
-# dass kein Modul mehr absolut auf ein Geschwistermodul zugreift, und dass die
-# Importrichtung nach unten zeigt.
+# Tests des Paketlayouts: alle Module sind importierbar, Geschwisterimporte
+# sind relativ und die Schichten zeigen nur nach unten.
 # =============================================================================
 
 from __future__ import annotations
@@ -24,22 +19,16 @@ PACKAGE_DIR = Path(wt3000_scpi.__file__).parent
 
 # Erlaubte Importe je Modul - die Schichtung aus dem Kopf von __init__.py.
 LAYERS: dict[str, set[str]] = {
-    # NEU (ROADMAP M1-2): 'wt3000_transport' ist die neue unterste Schicht und
-    # darf aus dem Paket gar nichts importieren - sonst zeigt Layer 0 nach oben
-    # und der Zweck des Protocols (geraetefreie Testbarkeit) ist dahin.
+    # Der Transport ist paketunabhaengig und damit geraetefrei testbar.
     "wt3000_transport": set(),
-    # UEBERARBEITET (M1-2): war set(), solange der Transport hier drinlag.
+    # Der Kern darf nur den Transport importieren.
     "wt3000_core": {"wt3000_transport"},
     "wt3000_common": {"wt3000_core"},
     "wt3000_numeric": {"wt3000_core"},
     "wt3000_rangeio": {"wt3000_core", "wt3000_common"},
     "wt3000_input": {"wt3000_core", "wt3000_common"},
-    # NEU (M2-1/M3-2): die Geraetegruppen jenseits von ':INPut' und ':NUMeric',
-    # zunaechst ':INTEGrate'. Bewusst KEIN 'wt3000_input' in dieser Menge,
-    # obwohl die Aufzaehlungsregel dort herkam: Geschwisterimporte auf
-    # derselben Schicht sind der Anfang vom Ende der Richtung. Die Regel ist
-    # deshalb nach wt3000_common gewandert, statt hier eine Ausnahme zu
-    # bekommen - genau die Entscheidung, die dieser Test erzwingen soll.
+    # Geraetegruppen nutzen gemeinsame Regeln aus wt3000_common und importieren
+    # keine Geschwister derselben Schicht.
     "wt3000_deviceconfig": {"wt3000_core", "wt3000_common"},
     "wt3000_itemspec": {"wt3000_core", "wt3000_common", "wt3000_numeric"},
     "wt3000_ranging": {"wt3000_core", "wt3000_common", "wt3000_rangeio"},
@@ -49,19 +38,10 @@ LAYERS: dict[str, set[str]] = {
         "wt3000_numeric",
         "wt3000_itemspec",
     },
-    # NEU (ROADMAP M4-2): die Ausgabeformate. Sie stehen auf derselben Stufe
-    # wie 'wt3000_measure' und NICHT neben der Fassade - dieser Test hat die
-    # Einordnung erzwungen, und zwar zu Recht: 'wt3000_sinks' kennt kein
-    # einziges SCPI-Kommando und keine Sitzung, es setzt nur den Vertrag
-    # 'SampleSink' um. Ein Fachmodul also, kein Einstiegspunkt.
-    #
-    # Bewusst NICHT erlaubt ist der Rueckweg: 'wt3000_measure' darf
-    # 'wt3000_sinks' nicht importieren. Genau daran haengt das 'Fertig, wenn'
-    # von M4-2 - die Messschleife kommt mit dem Protocol aus und kennt kein
-    # konkretes Format. Stuende hier ein Eintrag, waere die Entkopplung
-    # wieder dahin.
+    # Ausgabeformate setzen SampleSink um. Die Messschleife darf sie nicht
+    # zurueckimportieren und bleibt dadurch formatunabhaengig.
     "wt3000_sinks": {"wt3000_core", "wt3000_numeric", "wt3000_measure"},
-    # NEU (M2-4): der Sitzungs-Sicherungspunkt. Er steht auf Layer 3 und darf
+    # Der Sitzungs-Sicherungspunkt steht auf Layer 3 und darf
     # deshalb aus den Fachmodulen darunter importieren - auch aus den beiden
     # Geschwistern 'wt3000_itemspec' und 'wt3000_ranging', genau wie
     # 'wt3000_measure' es mit 'wt3000_itemspec' tut.
@@ -80,22 +60,8 @@ LAYERS: dict[str, set[str]] = {
         "wt3000_itemspec",
         "wt3000_ranging",
     },
-    # NEU (ROADMAP M1-1): die Fassade ist Layer 4 und darf deshalb aus allen
-    # Schichten darunter importieren - aber aus keinem Stufenskript und aus
-    # keinem zweiten Layer-4-Modul. Genau das haelt dieser Eintrag fest: die
-    # Fassade buendelt die Fachmodule, sie ergaenzt sie nicht um eigene
-    # Geraetekenntnis.
-    #
-    # UEBERARBEITET (M4-2): 'wt3000_sinks' ist dazugekommen. Die Fassade
-    # braucht es fuer 'MeasureControl.record_csv()' - den einen Aufruf, der
-    # dem Anwender den haeufigsten Fall abnimmt. Das ist Buendeln von
-    # Fachmodulen und damit genau die Aufgabe der Fassade; 'record()' selbst
-    # bleibt formatfrei und nimmt jede beliebige Senke.
-    # UEBERARBEITET (M2-1/M3-2): 'wt3000_deviceconfig' ist dazugekommen - die
-    # Fassade reicht 'wt.integration' durch. Wieder nur Buendeln: die
-    # Integrationslogik steht vollstaendig im Fachmodul, hier haengt sie an
-    # einer Eigenschaft mit derselben Sperrweitergabe wie wt.input und
-    # wt.ranges.
+    # Die Fassade buendelt alle tieferen Fachmodule, importiert aber weder
+    # Stufenskripte noch ein anderes Layer-4-Modul.
     "wt3000_device": {
         "wt3000_transport",
         "wt3000_core",
@@ -108,16 +74,10 @@ LAYERS: dict[str, set[str]] = {
         "wt3000_ranging",
         "wt3000_measure",
         "wt3000_sinks",
-        # UEBERARBEITET (M2-4): die Fassade buendelt den Sicherungspunkt.
+        # Die Fassade buendelt den Sicherungspunkt.
         "wt3000_backup",
     },
-    # NEU (Schritt 0a aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-11): die fuenf
-    # Stufenskripte. Sie fehlten hier, seit es sie gibt - 'LAYERS' fuehrte 11
-    # von 16 Modulen, und die fehlenden fuenf waren exakt die Skripte. Ein
-    # Stufenskript durfte damit 'wt3000_device' importieren oder ein zweites
-    # Stufenskript, ohne dass ein Test anschlug: der Test, der die Schichtung
-    # traegt, liess genau die Module aus, die am haeufigsten angefasst werden.
-    #
+    # Stufenskripte sind ebenfalls Teil der geprueften Schichtung.
     # Die Eintraege bilden den heutigen Bestand ab, sie sind also beim Anlegen
     # sofort gruen. Das ist Absicht - sie sichern, was schon gilt.
     #

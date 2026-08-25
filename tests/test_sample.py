@@ -1,18 +1,10 @@
 # =============================================================================
 # Datei: tests/test_sample.py
-# NEU (ROADMAP M4-1): der Datensatz als eigener Typ.
-#
-# Bis M4-1 wanderte eine Messzeile als fuenf getrennte Parameter in
-# 'CsvRecorder.write_row()'. Geprueft wurde daran nur, was die CSV daraus
-# machte - der Datensatz selbst war kein Gegenstand und hatte nichts, woran
-# ein Test haette ansetzen koennen.
-#
-# Diese Datei haelt die drei Zusagen von 'Sample' fest:
+# Tests der drei Zusagen des Datensatztyps Sample:
 #   1. Er traegt alles, was ein Zyklus hergibt, und ist unveraenderlich.
 #   2. 'status_flags()' ist die gemeinsame Grundlage jedes Ausgabeformats -
 #      Einzelwert-Status UND Kennzeichnung des Zyklus, in einer Liste.
-#   3. Die CSV entsteht ausschliesslich aus ihm; die Laengenpruefung aus P-3
-#      bleibt dabei erhalten.
+#   3. Die CSV entsteht aus ihm und prueft weiterhin die Spaltenlaenge.
 # =============================================================================
 
 from __future__ import annotations
@@ -24,7 +16,7 @@ from datetime import datetime, timezone
 import pytest
 
 from wt3000_scpi.wt3000_measure import Sample, SampleMark
-from wt3000_scpi.wt3000_sinks import CsvSink  # NEU (M4-2)
+from wt3000_scpi.wt3000_sinks import CsvSink
 from wt3000_scpi.wt3000_numeric import NumericValue, ValueStatus
 
 
@@ -73,7 +65,7 @@ def test_ist_unveraenderlich():
 
 
 def test_kennzeichnung_ist_optional_und_nachtraeglich_setzbar():
-    """M3-3/M3-4 setzen 'mark' - ueber replace(), nicht durch Zuweisung."""
+    """'mark' wird ueber replace(), nicht durch Zuweisung gesetzt."""
     s = datensatz()
     markiert = dataclasses.replace(s, mark=SampleMark.DUPLICATE)
     assert markiert.mark is SampleMark.DUPLICATE
@@ -112,7 +104,7 @@ def test_kennzeichnung_steht_vor_den_einzelwerten():
 
 
 def test_ausgefallener_zyklus_ohne_werte_meldet_nur_die_kennzeichnung():
-    """M3-4 schreibt eine Zeile ohne Messwerte, damit die Luecke sichtbar bleibt."""
+    """Eine Zeile ohne Messwerte macht einen ausgefallenen Zyklus sichtbar."""
     s = datensatz(values=[], mark=SampleMark.MISSING)
     assert s.status_flags(["U1", "I1", "P1"]) == ["mark=MISSING"]
 
@@ -158,7 +150,7 @@ def test_csv_zeile_entsteht_vollstaendig_aus_dem_sample(tmp_path):
 
 
 def test_kennzeichnung_landet_in_der_flag_spalte_ohne_neue_spalte(tmp_path):
-    """M3-3/M3-4 brauchen dadurch kein geaendertes Dateiformat."""
+    """Zyklusmarken brauchen dadurch kein geaendertes Dateiformat."""
     ziel = tmp_path / "dublette.csv"
     with CsvSink(ziel) as recorder:
         recorder.open(["U1", "I1", "P1"])
@@ -180,7 +172,7 @@ def test_fehlendes_condition_bleibt_eine_leere_zelle(tmp_path):
 
 
 def test_laengenpruefung_aus_p3_gilt_weiter(tmp_path):
-    """Der Umbau auf Sample darf die Absicherung aus P-3 nicht verlieren."""
+    """Sample darf die Absicherung der Spaltenlaenge nicht verlieren."""
     ziel = tmp_path / "verrutscht.csv"
     with CsvSink(ziel) as recorder:
         recorder.open(["U1", "I1", "P1"])
@@ -197,7 +189,7 @@ def test_laengenpruefung_aus_p3_gilt_weiter(tmp_path):
 
 
 def test_aus_der_paketwurzel_importierbar():
-    """Wer einen eigenen Sink baut (M4-2), soll den Typ dort finden."""
+    """Eigene Senken sollen den Typ an der Paketwurzel finden."""
     import wt3000_scpi
 
     assert wt3000_scpi.Sample is Sample

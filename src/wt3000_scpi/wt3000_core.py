@@ -14,8 +14,7 @@
 from __future__ import annotations
 
 import logging
-# NEU (ROADMAP M3-1): die Sitzung bekommt einen Besitzer. Beides gehoert
-# zusammen - das Lock schuetzt den Draht, der Besitzer schuetzt den Takt.
+# Das Lock schuetzt den Draht, der Sitzungsbesitz den Messtakt.
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -48,10 +47,7 @@ __all__ = [
     "Transport",
     "WTConfig",
     "WTError",
-    # NEU (Schritt 3, Befund A-08): die Herkunft der Konfiguration fuer den
-    # Protokollkopf. Zeigt zugleich, was Befund A-12 meint - ein neuer
-    # Layer-0-Name muss durch diese Weiterleitung nachgezogen werden, sonst
-    # erreicht ihn kein einziges Stufenskript.
+    # Herkunft der aufgeloesten Konfiguration fuer Protokollkoepfe.
     "config_file_in_use",
     # hier beheimatet (Layer 1)
     "MAX_BLOCK_READS",
@@ -87,8 +83,7 @@ class ReadOnlyViolation(WTError):
 class ConcurrentAccessError(WTError):
     """Fremdzugriff auf eine Sitzung, die gerade einem anderen Thread gehoert.
 
-    NEU (ROADMAP M3-1, Maßnahme A2). Der Fall, den diese Klasse sichtbar
-    macht, ist der teuerste im ganzen Paket: write() und query() sind ein
+    write() und query() sind ein
     Schreib-Lese-Paar auf EINER Verbindung. Laufen zwei davon nebenlaeufig,
     bekommt der eine Aufrufer die Antwort des anderen - und zwar
     stillschweigend, weil beide Antworten fuer sich plausibel aussehen. Eine
@@ -113,12 +108,9 @@ class WTSession:
     laeuft dieselbe Sitzung geraetefrei auf 'FakeTransport' - und spaeter auf
     einem Socket- oder VISA-Transport, ohne dass hier eine Zeile faellt.
 
-    ENTSCHIEDEN (ROADMAP M3-1, Maßnahme A2, 25.08.2026) - hier stand bis
-    hierher die offene Frage, ob diese Klasse intern serialisiert (Weg a) oder
-    exklusiv dem Mess-Thread gehoert (Weg b). Die Antwort ist BEIDES, aber in
-    verschiedenen Rollen:
+    Nebenlaeufigkeit wird auf zwei Ebenen geregelt:
 
-      Das RLock ist der MECHANISMUS. Es liegt um write/query/query_raw/
+      Das RLock ist der Mechanismus. Es liegt um write/query/query_raw/
       query_block und um drain_after_failure(). Es muss query_block() GANZ
       umschliessen, denn _assemble_block() liest ueber self._transport.read()
       nach - sonst liest der zweite Aufrufer mitten in einen fremden Block
@@ -126,7 +118,7 @@ class WTSession:
       geschuetzt: es verstellt ueber set_timeout() gemeinsamen
       Transportzustand und stellt ihn im 'finally' zurueck.
 
-      Der Besitz ist die REGEL. 'claim()' traegt einen Thread als Eigentuemer
+      Der Besitz ist die Regel. 'claim()' traegt einen Thread als Eigentuemer
       ein; jeder I/O-Aufruf aus einem anderen Thread endet danach in einer
       ConcurrentAccessError statt in einer Warteschlange.
 
@@ -155,14 +147,12 @@ class WTSession:
         self._config = config
         self._read_only = read_only
         self._remote_active = False
-        # NEU (ROADMAP M3-1): RLock und nicht Lock - query_block() ruft
-        # query_raw(), beide nehmen ihn. Mit einem einfachen Lock verklemmte
-        # sich die Sitzung an ihrem ersten Blockdatenzugriff selbst.
+        # RLock statt Lock: query_block() ruft query_raw(), beide sperren.
         self._lock = threading.RLock()
         self._owner: int | None = None
         self._owner_reason: str = ""
 
-    # -- Sitzungsbesitz (M3-1) ----------------------------------------------
+    # -- Sitzungsbesitz -----------------------------------------------------
 
     @property
     def owner(self) -> int | None:
@@ -292,8 +282,7 @@ class WTSession:
         einem Stueck liefert oder an einem 0x0A-Byte innerhalb der Binaerdaten
         abbricht (ZU VERIFIZIEREN, welches Verhalten tatsaechlich vorliegt).
 
-        NEU (ROADMAP M3-1): Das Lock umschliesst BEIDE Haelften. Der Grund
-        steht im Klassenkopf - '_assemble_block()' liest ueber
+        Das Lock umschliesst beide Haelften: '_assemble_block()' liest ueber
         'self._transport.read()' nach, und ein zweiter Aufrufer, der sich
         dazwischenschiebt, liest mitten in einen fremden Block hinein.
         """
@@ -402,8 +391,8 @@ class WTSession:
     def drain_after_failure(self) -> None:
         """Nach einem fehlgeschlagenen Query eine verspaetete Antwort abraeumen.
 
-        NEU (ROADMAP M3-1): als Ganzes unter dem Lock. Die Methode verstellt
-        ueber 'set_timeout()' gemeinsamen Transportzustand und nimmt ihn im
+        Als Ganzes gesperrt: Die Methode verstellt ueber 'set_timeout()'
+        gemeinsamen Transportzustand und nimmt ihn im
         'finally' zurueck - ein Zugriff dazwischen liefe in den kurzen
         Drain-Timeout statt in den konfigurierten und sae einen Timeout, den
         hinterher niemand erklaeren kann.

@@ -1,41 +1,14 @@
 # =============================================================================
 # Datei: tests/test_stage_remote_release.py
-# NEU (Schritt 1 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-01): Stufe 3 und
-# Stufe 4 geben das Bedienfeld frei, egal wie der Lauf ausgegangen ist.
+# Stufe 3 und 4 geben das Bedienfeld unabhaengig vom Ausgang des Laufs frei.
 #
-# Der Befund A-01: in beiden Skripten stand 'session.disable_remote()' als
-# letzte Anweisung IM RUMPF des 'finally', hinter dem try/except, das die
-# Wiederherstellung klammert - und dieses except fing nur 'WTError'. Verliess
-# eine andere Ausnahme die Wiederherstellung, wurde 'disable_remote()'
-# uebersprungen. Sie lief dann aus dem 'with TmctlTransport(...)' heraus, der
-# Transport wurde geschlossen, und ':COMMunicate:REMote OFF' war danach nicht
-# mehr moeglich: das Bedienfeld blieb gesperrt, der Anwender musste am Geraet
-# LOCAL druecken.
+# Der Test erzwingt eine Ausnahme vor 'session.disable_remote()' und prueft
+# ausschliesslich, dass REMOTE dennoch vor dem Schliessen geloest wird.
 #
-# Stufe 2 hatte die richtige Fassung bereits (F-07, eigenes finally um den
-# Nutzteil); dieser Test haelt sie jetzt fuer Stufe 3 und 4 fest. Er ist
-# bewusst so formuliert, dass er NICHT prueft, wie der Lauf ausgegangen ist -
-# nur, dass REMOTE zurueckgenommen wurde. Genau das ist die Zusage.
+# Die Vorrichtung 'stufenlauf' wird von conftest.py bereitgestellt.
 #
-# Die Vorrichtung 'stufenlauf' liegt in conftest.py und wird von pytest ueber
-# den Parameternamen zugestellt - sie wird deshalb nicht importiert. Bis
-# Schritt 0c stand sie hier lokal, mit einer Fallunterscheidung, die Stufe 3
-# brauchte: sie fuehrte 'output_dir()' als Aufruf statt als Modulkonstante.
-# Schritt 0b hat das vereinheitlicht, die Unterscheidung ist damit entfallen.
-#
-# WAS VOR DER REPARATUR ROT WAR - gemessen, nicht angenommen: von den zehn
-# Pruefsaetzen dieser Datei schlugen genau ZWEI fehl, naemlich
-# test_remote_wird_auch_bei_nicht_wterror_aus_dem_restore_zurueckgenommen fuer
-# Stufe 3 und Stufe 4. Das ist der Befund A-01 in seiner reinen Form: die
-# Ausnahme kommt aus der WIEDERHERSTELLUNG.
-#
-# Die uebrigen acht waren bereits gruen, und das aus einem Grund, der die
-# Grenze des alten Fehlers genau beschreibt: kam die Ausnahme aus dem NUTZTEIL,
-# lief der finally-Rumpf ja durch und erreichte sein 'disable_remote()' am
-# Ende. Nur wenn der Restore-Block SELBST mit etwas anderem als WTError
-# abbrach, wurde die Zeile uebersprungen. Diese acht sind deshalb keine
-# Nachweise der Reparatur, sondern Absicherungen gegen sie: sie halten fest,
-# was die neue Klammer NICHT kaputtmachen darf.
+# Abgedeckt sind Fehler aus Nutzteil und Wiederherstellung, einschliesslich
+# Ausnahmen ausserhalb der WTError-Hierarchie.
 # =============================================================================
 
 from __future__ import annotations

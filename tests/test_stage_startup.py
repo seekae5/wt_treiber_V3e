@@ -1,13 +1,10 @@
 # =============================================================================
 # Datei: tests/test_stage_startup.py
-# NEU (Schritt 3 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-08): der Anfang
-# der Aufrufkette ist abgesichert.
+# Der Anfang der Aufrufkette ist abgesichert.
 #
-# Der Befund A-08: 'WTConfig.from_environment()' stand in allen sieben
-# ausfuehrbaren Skripten VOR dem 'try' und VOR 'setup_logging()'. Die
-# Aufloesungskette ist der erste Aufruf von Layer 4 nach Layer 0 - und war der
-# einzige, der ausserhalb jeder Absicherung lag. Sie kann drei WTError werfen:
-# nicht lesbare Datei, kein JSON-Objekt, nicht auswertbarer Feldwert.
+# 'WTConfig.from_environment()' muss bei allen ausfuehrbaren Skripten nach
+# 'setup_logging()' innerhalb des try liegen. Nicht lesbare Dateien, falsche
+# JSON-Struktur und ungueltige Feldwerte erscheinen so im Protokoll.
 #
 # Zwei Folgen, die dieser Test festhaelt:
 #

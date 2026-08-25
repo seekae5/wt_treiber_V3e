@@ -1,14 +1,9 @@
 # =============================================================================
 # Datei: tests/test_probe_capabilities.py
-# NEU: maschinelle Pruefung von tools/hardware/probe_capabilities.py.
+# Maschinelle Pruefung von tools/hardware/probe_capabilities.py.
 #
-# Das Skript beantwortet die offenen Fragen aus Abschnitt 5 von
-# docs/ANALYSE_FEHLENDE_FUNKTIONEN.md. Es faehrt dafuer an ein eingemessenes
-# Geraet - und sein Dateikopf gibt dabei eine harte Zusage: es sendet KEIN
-# EINZIGES Schreibkommando. Diese Zusage ist der Grund, warum es
-# unbeaufsichtigt laufen darf, und sie steht hier als Pruefsatz, nicht nur als
-# Kommentar (dieselbe Erwaegung wie bei Stufe 5, siehe
-# test_stage_durchlauf.test_stufe5_schreibt_kein_einziges_kommando).
+# Das Skript darf an einem eingemessenen Geraet kein Schreibkommando senden;
+# diese Voraussetzung fuer unbeaufsichtigte Laeufe wird hier durchgesetzt.
 #
 # Der zweite Schwerpunkt: eine nicht verbaute Option ist fuer dieses Skript
 # ein ERGEBNIS und kein Fehler. Ein Query auf eine fehlende Gruppe laeuft am

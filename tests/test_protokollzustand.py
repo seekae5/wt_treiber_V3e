@@ -1,17 +1,9 @@
 # =============================================================================
 # Datei: tests/test_protokollzustand.py
-# NEU (ROADMAP M1-4, Maßnahme A8 aus
-# docs/BEWERTUNG_AUTOMATISIERTE_MESSABLAEUFE.md).
-#
-# Der Befund: 'check_protocol_state()' konnte den Sollzustand nur PRUEFEN.
-# Wer ein Geraet vorfand, an dem jemand am Bedienfeld
-# ':COMMunicate:HEADer 1' eingestellt hatte, bekam einen klaren Abbruch - und
-# keinen Weg weiterzuarbeiten, obwohl der Treiber die Ursache mit einem
-# einzigen Kommando selbst beheben kann. Fuer einen automatisierten Lauf war
-# das eine haeufige und vermeidbare Abbruchursache.
+# Tests fuer Pruefung und optionales Herstellen des Protokollzustands.
 #
 # Der Fall ist heikler, als er aussieht, und deshalb ausdruecklich getestet:
-# steht der Header auf 1, antwortet das Geraet auf die Frage nach dem Header
+# Steht der Header auf 1, antwortet das Geraet auf die Frage nach dem Header
 # mit ':COMMUNICATE:HEADER 1' statt mit '1' (Handbuch IM WT3001E-17EN, 6-24).
 # Die Erhebung des Ist-Zustands muss also genau die Antwortform verkraften,
 # die es nur im Fehlerfall gibt.

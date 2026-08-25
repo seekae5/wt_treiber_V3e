@@ -1,20 +1,13 @@
 # =============================================================================
 # Datei: tests/test_deviceconfig.py
-# NEU (ROADMAP M3-2 / M2-1, Rang 1 aus docs/ANALYSE_FEHLENDE_FUNKTIONEN.md):
-# die Integrationsfunktion geraetefrei pruefen.
-#
-# Die Gruppe ':INTEGrate' ist die groesste funktionale Luecke gewesen, die die
-# Analyse gefunden hat - und die einzige, deren Kommandos den Zaehlerstand
-# eines laufenden Messgeraets veraendern. Entsprechend liegt der Schwerpunkt
-# dieser Datei nicht auf den Gettern, sondern auf drei Fragen:
+# Geraetefreie Tests der Integrationsfunktion. Der Schwerpunkt liegt auf drei
+# sicherheits- und geraeterelevanten Fragen:
 #
 #   1. Kommt ueberhaupt ein Kommando am Geraet an, das nicht ankommen darf?
 #      (Sperre, GROUP_RESET, Nur-Lesen-Sitzung)
 #   2. Wird ein Lauf zuverlaessig beendet, auch wenn der Block scheitert?
 #      (running() und sein finally)
-#   3. Verstehen die Parser die KURZFORMEN, die das Geraet tatsaechlich
-#      schickt? Am 21.08.2026 gemessen: 'RES' statt 'RESET', 'NORM' statt
-#      'NORMAL'. Ein Treiber, der nur die Langform kennt, faellt am Geraet um.
+#   3. Verstehen die Parser die Geraete-Kurzformen 'RES' und 'NORM'?
 #
 # Gefahren wird gegen 'FakeTransport' - also mit WTSession, Nur-Lesen-Sperre
 # und Fehlerqueue im Ruecken, nicht gegen eine Attrappe der Sitzung.

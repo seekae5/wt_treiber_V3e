@@ -1,11 +1,9 @@
 # =============================================================================
 # Datei: tests/test_transport_fehlerpfade.py
-# NEU (Schritt 5a aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-04): der
-# Konstruktor von TmctlTransport uebersetzt seine Fehlerwege in WTError.
+# TmctlTransport uebersetzt alle Konstruktorfehler in WTError.
 #
-# Der Befund A-04: 'resolve_dll_path()' ist sorgfaeltig gebaut und wirft
-# WTError mit einer Meldung, die alle drei Abhilfen nennt. Die beiden Zeilen
-# DANACH nicht:
+# 'resolve_dll_path()' und die anschliessenden Ladeoperationen muessen WTError
+# mit konkreten Abhilfen liefern:
 #
 #     os.add_dll_directory(str(dll.parent))   # OSError
 #     self._tm = ct.WinDLL(str(dll))          # OSError; sonst AttributeError

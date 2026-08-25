@@ -1,58 +1,10 @@
-# =============================================================================
-# Datei: wt3000_backup.py
-# NEU (ROADMAP M2-4, Rang 6 aus docs/ANALYSE_FEHLENDE_FUNKTIONEN.md):
-# Layer 3 - ein Sicherungspunkt fuer die ganze Sitzung.
+# Gemeinsamer Sicherungspunkt fuer die Sitzung. Die Fachmodule erfassen,
+# serialisieren und restaurieren ihre Daten selbst; SessionBackup bestimmt nur
+# Reihenfolge und Endkontrolle.
 #
-# WARUM JETZT
-# -----------
-# Die Analyse nennt als Eintrittsbedingung: "Sicherheitsnetz, sobald 2-3 neue
-# schreibbare Gruppen existieren". Seit dem 21.08.2026 sind es genau drei -
-# ':INTEGrate', ':MEASure' und ':HARMonics' -, und jede von ihnen kann einen
-# eingemessenen Geraetezustand veraendern. Bis hierher konnte ein Anwender
-# Bereiche sichern (RangeBackup), die Eingangskonfiguration sichern
-# (InputSnapshot) und die Item-Tabelle sichern (save_backup_bundle) - drei
-# Dateien, drei Aufrufe, drei Gelegenheiten, eine davon zu vergessen. Und die
-# drei neuen Gruppen waren in keiner davon enthalten.
-#
-# DIESES MODUL SCHREIBT KEINEN EINZIGEN PARSER UND KEIN EINZIGES KOMMANDO
-# ----------------------------------------------------------------------
-# Das ist der Kern: jeder Baustein bringt seine Erfassung, seine
-# Serialisierung und seinen Rueckweg selbst mit -
-#
-#   InputSnapshot.capture()/.diff()      restore_input_snapshot()
-#   RangeBackup.capture()                restore_ranges()
-#   ItemTable.read_from_device()         restore_item_table()
-#   IntegrationConfig.capture()          IntegrationConfig.restore()
-#   ComputationConfig.capture()          ComputationConfig.restore()
-#   HarmonicsConfig.capture()            HarmonicsConfig.restore()
-#
-# 'SessionBackup' haelt sie zusammen, legt die REIHENFOLGE fest und prueft den
-# Endzustand. Mehr nicht - und mehr soll es auch nicht sein.
-#
-# DIE UEBERSCHNEIDUNG, DIE MAN KENNEN MUSS
-# ----------------------------------------
-# 'InputSnapshot' enthaelt die Messbereiche BEREITS - restore_input_snapshot()
-# schreibt Spannungs- und Strombereich und Auto-Range mit. 'RangeBackup' sichert
-# denselben Zustand ueber einen anderen Codepfad noch einmal.
-#
-# Beides zu SICHERN ist Absicht, beides zurueckzuSCHREIBEN waere ein Fehler:
-# derselbe Wert zweimal gesetzt kostet Zeit, und bei einem Zwischenfehler waere
-# unklar, welcher Pfad den Zustand zuletzt angefasst hat. Deshalb gilt hier:
-#
-#   * wiederhergestellt werden die Bereiche AUSSCHLIESSLICH ueber den
-#     Input-Snapshot;
-#   * der Bereichsteil dient als unabhaengiger Zweitbeleg - er wird beim
-#     Pruefen des Endzustands gegengelesen.
-#
-# Aus der Redundanz wird damit eine Kontrolle statt einer Stolperfalle.
-#
-# WAS NICHT GESICHERT WIRD
-# ------------------------
-# Der Integrationszaehler selbst (die aufgelaufenen Wh/Ah) und alle Messwerte:
-# das sind Messergebnisse, kein Geraetezustand. 'IntegrationSettings.state'
-# steht zwar in der Datei, wird aber nicht zurueckgeschrieben - ob das Geraet
-# laeuft, ist kein Einstellwert.
-# =============================================================================
+# Messbereiche werden ueber InputSnapshot restauriert. RangeBackup erfasst
+# denselben Zustand unabhaengig und dient nur zur Kontrolle. Messwerte und
+# Integrationszaehler sind Ergebnisse, kein wiederherstellbarer Geraetezustand.
 
 from __future__ import annotations
 

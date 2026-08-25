@@ -23,11 +23,10 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass          # UEBERARBEITET (RANGEIO-2)
+from dataclasses import dataclass
 from enum import Enum
-from typing import Final                   # UEBERARBEITET (RANGEIO-2)
+from typing import Final
 
-# UEBERARBEITET (Punkt 4, src-Layout): paketrelative Importe.
 from .wt3000_common import (
     ALL,
     DEFAULT_ELEMENTS,
@@ -35,13 +34,11 @@ from .wt3000_common import (
     SIGMB,
     canonical_scope,
     format_nrf,
-    # UEBERARBEITET (F-02, siehe AENDERUNGEN_2026-08-18.md): 'is_element_scope'
-    # entfernt - wurde importiert, aber in diesem Modul nie benutzt.
     parse_boolean,
     parse_nr3,
     scope_suffix,
     strip_response_header,
-    values_match,                          # UEBERARBEITET (RANGEIO-2)
+    values_match,
 )
 from .wt3000_core import WTError, WTSession
 
@@ -68,17 +65,15 @@ class Quantity(Enum):
         """Bezeichnung des Messbereichs fuer Protokollausgaben."""
         return "Spannungsbereich" if self is Quantity.VOLTAGE else "Strombereich"
 
-    # UEBERARBEITET (RANGEIO-2): Die Einheit eines Strombereichs haengt von der
-    # Eingangsart ab - direkt in Ampere, am externen Sensor in Volt.
     def unit(self, sensor: bool = False) -> str:
-        """Einheit des Bereichswerts fuer diese Messgroesse."""
+        """Einheit: Strom direkt in Ampere, am externen Sensor in Volt."""
         if self is Quantity.VOLTAGE:
             return "V"
         return "V" if sensor else "A"
 
 
 # ---------------------------------------------------------------------------
-# UEBERARBEITET (RANGEIO-2): Bereichswert samt Eingangsart
+# Bereichswert samt Eingangsart
 # ---------------------------------------------------------------------------
 
 # Kurzform, mit der das Geraet den Sensoreingang meldet ('EXT'/'EXTERNAL').
@@ -166,19 +161,8 @@ class RangeAccess:
     {'SIGMA': (1, 2, 3), 'SIGMB': (4,)} fuer die Verdrahtung V3A3,P1W2.
     Ohne diese Angabe werden SIGMA-/SIGMB-Scopes abgelehnt statt geraten -
     eine falsch geratene Zuordnung waere genau der Fehler, den die strikte
-    Scope-Normalisierung verhindern soll. Seit Schritt 4 gilt das nicht mehr
-    nur fuer den Weg ueber wt3000_ranging, sondern fuer jeden Aufruf an diesem
-    Objekt (siehe _geprueftes_suffix).
-
-    ZU BEACHTEN - 'elements' ist eine ANNAHME, keine Tatsache:
-    DEFAULT_ELEMENTS = (1, 2, 3, 4) beschreibt den vorliegenden Aufbau, nicht
-    das Geraet am anderen Ende. Wer die Voreinstellung stehen laesst, prueft
-    also gegen eine Annahme - stage5b und beide Skripte unter tools/hardware/
-    tun genau das, obwohl stage5b ein Feld weiter 'access.get_module()'
-    protokolliert. Das ist Befund S-01; aufgeloest wird es mit ROADMAP M1-3,
-    wenn 'DeviceInfo' die bestueckte Elementliste liefert. Die Pruefung in
-    _geprueftes_suffix() folgt dann ohne weitere Aenderung der richtigen
-    Liste - sie fragt dieses Objekt, nicht die Konstante.
+    Scope-Normalisierung verhindern soll. 'elements' sollte aus 'DeviceInfo'
+    kommen; DEFAULT_ELEMENTS ist nur die Annahme fuer direkte Nutzung.
     """
 
     def __init__(
@@ -215,8 +199,7 @@ class RangeAccess:
     ) -> None:
         """Elementliste und Wiring-Units ersetzen - nach einer Umverdrahtung.
 
-        NEU (ROADMAP M1-3, Befund S-01). Beides gehoert zusammen und wird
-        deshalb zusammen gesetzt: eine neue Verdrahtung aendert, welche
+        Beides wird atomar aktualisiert: eine neue Verdrahtung aendert, welche
         Elemente es gibt UND welche Unit sie traegt. Getrennt zu setzen hiesse,
         dass es dazwischen einen Zustand gibt, in dem das eine schon neu und
         das andere noch alt ist - und genau in diesem Zustand loest
@@ -271,49 +254,15 @@ class RangeAccess:
     def _geprueftes_suffix(self, scope: str | int) -> str:
         """Scope pruefen und in die SCPI-Pfadendung wandeln.
 
-        NEU (Schritt 4 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-03).
-
-        Bis hierher gingen 'get_range()', 'set_range()', 'get_auto()' und
-        'set_auto()' direkt ueber 'scope_suffix()' - das jede Zahl in
-        ':ELEMent<n>' uebersetzt, ohne zu fragen, ob es das Element gibt.
-        'expand_scope()' wurde ausschliesslich aus 'wt3000_ranging' heraus
-        aufgerufen, also eine Schicht hoeher.
-
-        Das war der Kernbefund der Analyse in Reinform: die Schutzregel lag
-        eine Schicht ueber dem Knoten, den sie schuetzt. Layer 4 darf Layer 2
-        direkt aufrufen - und tut es (beide Skripte unter tools/hardware/,
-        jeder Anwender, der 'wt.ranges' aus der Fassade zieht). Wer an Layer 3
-        vorbeigreift, verlor damit die Regel, ohne dass irgendetwas davon
-        Notiz nahm: am Geraet faellt ein Kommando an ein nicht bestuecktes
-        Element als Eintrag in der Fehlerqueue auf - also erst bei
-        'assert_no_error()', oder gar nicht.
-
-        Der Rueckgabewert von 'expand_scope()' wird hier nicht gebraucht; es
-        geht allein um die Pruefung. Sie kostet nichts und gehoert zu dem
-        Objekt, das die Elementliste besitzt.
-
-        BEABSICHTIGTE VERHALTENSAENDERUNG: Ein SIGMA-Scope auf einem
-        RangeAccess ohne 'sigma_members' wird ab jetzt abgelehnt statt
-        stillschweigend gesendet.
-
-        Fuer den geplanten Weg ueber wt3000_ranging aendert das NICHTS, und
-        zwar nachgemessen: 'apply_plan()' ruft als erstes 'plan.validate()',
-        und das loest jeden Scope ueber 'expand_scope()' auf (wt3000_ranging,
-        RangePlan.validate). Derselbe WTError fiel dort also schon vorher, und
-        ebenfalls bevor ein einziges Kommando hinausging.
-
-        Betroffen ist allein, wer Layer 2 DIREKT benutzt und den RangePlan
-        umgeht - also genau die Gruppe, um die es in A-03 geht: die Skripte
-        unter tools/hardware/ und jeder Anwender, der 'wt.ranges' aus der
-        Fassade zieht. Fuer sie gab es diese Pruefung bisher ueberhaupt nicht.
+        Die Pruefung liegt absichtlich hier, damit auch direkte Zugriffe ohne
+        RangePlan keine Kommandos an nicht vorhandene Elemente senden. SIGMA-
+        Scopes ohne 'sigma_members' werden abgelehnt statt geraten.
         """
         self.expand_scope(scope)
         return scope_suffix(scope)
 
     # -- Lesen --------------------------------------------------------------
 
-    # UEBERARBEITET (RANGEIO-2): Rueckgabe ist jetzt RangeValue statt float,
-    # damit der Sensoreingang nicht mehr in parse_nr3() abstuerzt.
     def get_range(self, quantity: Quantity, element: int) -> RangeValue:
         """Eingestellten Messbereich eines Elements lesen.
 
@@ -330,7 +279,7 @@ class RangeAccess:
         response = self._session.query(f"{quantity.value}:AUTO{suffix}?")
         return parse_boolean(response, f"Autorange {quantity.label} Element {element}")
 
-    def get_ranges(self, quantity: Quantity) -> dict[int, RangeValue]:  # UEBERARBEITET (RANGEIO-2)
+    def get_ranges(self, quantity: Quantity) -> dict[int, RangeValue]:
         """Messbereiche aller Elemente lesen."""
         return {e: self.get_range(quantity, e) for e in self._elements}
 
@@ -367,7 +316,6 @@ class RangeAccess:
 
     # -- Schreiben ----------------------------------------------------------
 
-    # UEBERARBEITET (RANGEIO-2): nimmt jetzt auch einen Sensorbereich entgegen.
     def set_range(
         self,
         quantity: Quantity,

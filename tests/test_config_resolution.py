@@ -1,14 +1,6 @@
 # =============================================================================
 # Datei: tests/test_config_resolution.py
-# NEU (P-7, siehe PLAN_BEFUNDE_2026-08-19.md): die Auflaesungskette der
-# Verbindungsparameter.
-#
-# Befund BF-M2: in WTConfig standen eine feste Labor-IP, Benutzername und
-# Passwort sowie ein DLL-Pfad aus dem Benutzerverzeichnis eines bestimmten
-# Rechners. Auf jedem zweiten Rechner war der Treiber nur durch
-# Quelltextaenderung benutzbar.
-#
-# Geprueft wird die RANGFOLGE - sie ist die eigentliche Zusage:
+# Aufloesungskette der Verbindungsparameter. Entscheidend ist die Rangfolge:
 #   Parameter > Umgebungsvariable > Konfigurationsdatei > Voreinstellung
 # =============================================================================
 

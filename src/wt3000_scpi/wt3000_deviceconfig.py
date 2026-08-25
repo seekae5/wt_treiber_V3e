@@ -1,86 +1,12 @@
-# =============================================================================
-# Datei: wt3000_deviceconfig.py
-# NEU (ROADMAP M2-1 / M3-2, Rang 1 aus docs/ANALYSE_FEHLENDE_FUNKTIONEN.md):
-# Layer 2 - Geraetegruppen ausserhalb von ':INPut' und ':NUMeric'.
+# Konfiguration der Gruppen ':INTEGrate', ':MEASure' und ':HARMonics'. Sie
+# teilen Parser, Schreibpfad und die doppelte Schreibsperre aus wt3000_input.
+# Die Fassade prueft optionsgebundene Gruppen, weil nur sie den Geraetesteckbrief
+# kennt.
 #
-# WARUM DIESES MODUL UND NICHT EIN EIGENES 'wt3000_integrate.py'
-# --------------------------------------------------------------
-# Die Frage war schon gestellt und beantwortet, bevor hier eine Zeile stand:
-# der Klassenkopf von 'MeasureControl' (wt3000_device.py) haelt fest, dass
-# ':INTEGrate' in der ROADMAP an ZWEI Stellen steht - unter M2-1 als Gruppe
-# eines neuen Fachmoduls 'wt3000_deviceconfig.py' und unter M3-2 als Ablauf -
-# und warnt: "Wird M3-2 vorab als eigenes Modul gebaut, entsteht genau die
-# vierte Kopie derselben Parser, die M2-5 verhindern soll." Der dortige
-# Vorschlag lautet: "die Knotenebene (MODE, TIMer, RTIMe, STATe?) gehoert nach
-# unten in die Konfigurationsschicht". Genau das ist diese Datei; sie traegt
-# deshalb den in ROADMAP Abschnitt 3 vorgesehenen Namen und nicht einen
-# eigenen.
-#
-# Seit dem 21.08.2026 wohnen hier zwei Gruppen, und die zweite ist der Beleg,
-# dass die Entscheidung getragen hat:
-#
-#   IntegrationConfig   ':INTEGrate' - Wh-/Ah-Messung steuern (Rang 1)
-#   ComputationConfig   ':MEASure'   - Averaging, Wirkungsgrad,
-#                                      Frequenzmessquelle (Rang 2)
-#   HarmonicsConfig     ':HARMonics' - Oberschwingungsanalyse (Rang 3)
-#
-# Alle drei teilen sich Sperre, Schreibpfad und Parser; hinzugekommen ist fuer
-# die zweite und dritte Gruppe keine einzige neue Parserregel.
-#
-# ':HARMonics' ist die erste Gruppe hier, die eine GERAETEOPTION verlangt
-# ('/G5' oder '/G6'). Geprueft wird das nicht in dieser Datei, sondern an der
-# Fassade: 'DeviceInfo.require_option()' kennt den Steckbrief, dieses Modul
-# nicht. Damit ist die Optionserfassung aus M1-3 zum ersten Mal nicht nur
-# vorhanden, sondern im Weg eines Aufrufers.
-#
-# Kein einziger Parser ist dafuer neu geschrieben worden: Kopfentfernung,
-# NR1/NR3, Boolean, NRf-Formatierung und die Aufzaehlungsregel kommen alle aus
-# 'wt3000_common'. Die Aufzaehlungsregel lag bis zum 21.08.2026 in
-# 'wt3000_input' und ist fuer dieses Modul eine Schicht tiefer gezogen worden
-# (Geschwisterimporte verbietet LAYERS in tests/test_package_layout.py) - ein
-# Stueck M2-5, nebenbei mit erledigt.
-#
-# WAS ':INTEGrate' IST
-# --------------------
-# Die Integrationsfunktion des WT3000: das Geraet summiert Leistung zu Energie
-# (Wh) und Strom zu Ladung (Ah) auf. Ohne diese Gruppe kann der Treiber nur
-# Momentanwerte lesen - laut Analyse 2.1 "die groesste funktionale Luecke
-# gegenueber einem vollstaendigen Leistungsmessgeraetetreiber". Die Gruppe
-# braucht KEINE Geraeteoption (Analyse 0.1, Gegenbeispiel); an diesem Geraet
-# ist sie am 21.08.2026 lesend belegt worden.
-#
-# GRUNDREGEL DIESES MODULS - dieselbe wie in wt3000_input
-# -------------------------------------------------------
-# Das Geraet ist metrologisch eingemessen. Jeder Schreibzugriff ist doppelt
-# gesperrt: 'allow_changes=False' (Voreinstellung) und zusaetzlich eine
-# Gruppensperre. Geschuetzt ist per Voreinstellung genau eine Gruppe: RESET.
-# ':INTEGrate:RESet' verwirft den aufgelaufenen Zaehlerstand unwiderruflich -
-# also den Messwert selbst, nicht nur eine Einstellung. Eine versehentlich
-# geloeschte Stundenmessung ist nicht wiederherstellbar, deshalb steht davor
-# dieselbe ausdrueckliche Freigabe wie vor einem Bereichswechsel:
-#
-#     with cfg.unlocked(GROUP_RESET):
-#         cfg.reset()
-#
-# WAS AM GERAET BELEGT IST UND WAS NICHT
-# --------------------------------------
-# Belegt (probe_capabilities.py, 21.08.2026, nur lesend):
-#   ':INTEGrate:MODE?'  -> 'NORM'   (Kurzform! siehe canonical_enum_token)
-#   ':INTEGrate:STATe?' -> 'RES'    (Kurzform)
-#   ':INTEGrate:TIMer?' -> '0,0,0'
-#   ':INTEGrate:RTIMe?' -> '2006,1,1,0,0,0;2006,1,1,1,0,0'
-#
-# NICHT belegt, weil Schreibkommandos: STARt, STOP, RESet, jedes Setzen. Sie
-# sind hier nach Handbuch (6-74/6-75) gebaut und gegen FakeTransport geprueft;
-# die Geraeteabnahme steht aus und haengt an ROADMAP M0-3 (nimmt das Geraet
-# Set-Kommandos ueber Ethernet ohne ':COMMunicate:REMote ON' an?).
-#
-# WIDERLEGT und deshalb hier bewusst NICHT gebaut: ':INTEGrate:RTIMe?' als
-# Restzeitanzeige. Zwei Abfragen im Abstand von 2 s lieferten denselben Wert -
-# RTIMe ist das Wanduhrpaar des Echtzeitmodus, kein Zaehler. Der Fortschritt
-# kommt aus 'remaining_seconds()': eingestellte Dauer minus verstrichene Zeit,
-# und die verstrichene Zeit ist das NUMeric-Item TIME. Siehe dort.
-# =============================================================================
+# ':INTEGrate:RESet' loescht einen Messwert unwiderruflich und verlangt daher
+# die ausdrueckliche Freigabe von GROUP_RESET. RTIMe ist das Wanduhrpaar des
+# Echtzeitmodus, keine Restzeitanzeige; remaining_seconds() verwendet deshalb
+# die konfigurierte Dauer und das NUMeric-Item TIME.
 
 from __future__ import annotations
 
@@ -325,11 +251,9 @@ def _optional_datetime(text: str | None) -> datetime | None:
 class IntegrationSettings:
     """Alles, was ':INTEGrate' ueber sich preisgibt - in einem Datensatz.
 
-    Gedacht als Sicherungspunkt vor einem Lauf und als Vorlage fuer den
-    gemeinsamen 'SessionBackup' aus M2-4: 'restore()' schreibt genau die
-    Felder zurueck, die eingestellt werden koennen. 'state' gehoert bewusst
-    dazu, ist aber nicht wiederherstellbar - er beschreibt, was das Geraet
-    gerade tut, nicht wie es eingestellt ist.
+    'restore()' schreibt nur einstellbare Felder zurueck. 'state' gehoert zur
+    Momentaufnahme, ist aber nicht wiederherstellbar: Er beschreibt den
+    laufenden Zustand und keine Einstellung.
     """
 
     mode: IntegrationMode
@@ -339,7 +263,7 @@ class IntegrationSettings:
     real_time_start: datetime | None = None
     real_time_end: datetime | None = None
 
-    # -- Serialisieren (M2-4) ----------------------------------------------
+    # -- Serialisieren -----------------------------------------------------
     #
     # Enums gehen als ihr Wert in die Datei ('NORMal', 'RESET'), Zeitpunkte als
     # ISO-Zeichenkette. Beides ist im JSON lesbar - ein Backup, das man nicht
@@ -400,9 +324,7 @@ class IntegrationConfig:
     Gruppe, die nicht in 'protected_groups' steht - dieselbe doppelte Sperre
     wie in wt3000_input, mit derselben Begruendung.
 
-    Der uebliche Ablauf einer Wh-Messung, und zugleich das Abnahmekriterium
-    von ROADMAP M3-2 ("eine Wh-Messung ueber definierte Dauer sicher
-    gestartet, beendet und ausgelesen"):
+    Ueblicher Ablauf einer zeitlich definierten Wh-Messung:
 
         with WT3000.connect(read_only=False, allow_changes=True) as wt:
             integ = wt.integration
@@ -681,9 +603,8 @@ class IntegrationConfig:
         """Eine Momentaufnahme zurueckschreiben.
 
         'state' wird ausdruecklich NICHT wiederhergestellt: ob das Geraet
-        laeuft, ist kein Einstellwert. Die Vorlage fuer M2-4 (SessionBackup)
-        ist damit vollstaendig - alles, was 'capture()' liest und was sich
-        setzen laesst, geht hier auch wieder hinein.
+        laeuft, ist kein Einstellwert. Alle von 'capture()' gelesenen und
+        einstellbaren Werte werden dagegen zurueckgeschrieben.
         """
         self.set_mode(settings.mode)
         self.set_timer(seconds=settings.timer_seconds)
@@ -861,41 +782,12 @@ class IntegrationConfig:
 
 # ===========================================================================
 # Rechengruppe ':MEASure'
-# NEU (ROADMAP M2-1 Punkt 2 und 3, Rang 2 aus ANALYSE_FEHLENDE_FUNKTIONEN.md)
 # ===========================================================================
 #
-# WARUM DIESE GRUPPE ALS ZWEITE KOMMT
-# -----------------------------------
-# Die Analyse (2.2) begruendet es knapp: "Averaging ist in der Praxis fast
-# immer aktiv; ohne Softwarezugriff muss der Anwender es panelseitig
-# vorkonfigurieren und darf es waehrend der Messung nie pruefen/aendern."
-# Anders als ':INTEGrate' ist das keine eigene Betriebsart, sondern eine
-# Eigenschaft JEDER Messung - eine Messreihe mit unbemerkt eingeschaltetem
-# Averaging ueber 64 Zyklen ist eine andere Messung als dieselbe Reihe ohne.
-#
-# WAS HIER GEBAUT IST UND WAS NICHT
-# ---------------------------------
-# Gebaut sind die drei Stellgroessen, die die Analyse namentlich nennt -
-# "Averaging-Ein/Aus und -Zeitkonstante, Effizienzformel-Auswahl,
-# Frequenzmessquelle je Element" - und zwei Skalare, die den Schnappschuss
-# abrunden (SQFormula, SYNChronize).
-#
-# BEWUSST NICHT gebaut, obwohl in derselben Kommandogruppe:
-#
-#   :MEASure:FUNCtion<1..20>  benutzerdefinierte Rechenkanaele. Sie nehmen
-#                             einen AUSDRUCK als Zeichenkette ("UMN(E1)") -
-#                             eine eigene kleine Sprache mit eigener
-#                             Fehlerbehandlung. Das ist ein eigener Schritt,
-#                             kein Nebenprodukt.
-#   :MEASure:PC               Corrected Power nach IEC - eigene Normfrage.
-#   :MEASure:DMeasure         Delta-Berechnung; braucht '/DT' (vorhanden) UND
-#                             passt seine zulaessigen Werte an die Verdrahtung
-#                             an. Gehoert neben die Verdrahtungslogik, nicht
-#                             hierher.
-#   :MEASure:COMPensation     Verdrahtungs- und Wirkungsgradkompensation.
-#   :MEASure:PHASe, :SAMPling, :MHOLd
-#
-# Sie halbfertig mitzunehmen waere schlechter, als sie hier zu benennen.
+# Averaging beeinflusst jede Messreihe und muss daher zusammen mit
+# Wirkungsgradformeln, Frequenzquellen, SQFormula und Synchronrolle erfassbar
+# sein. Benutzerdefinierte Rechenkanäle und weitere MEASure-Untergruppen sind
+# nicht Teil dieser API.
 
 
 class AveragingType(Enum):
@@ -1526,7 +1418,7 @@ class ComputationConfig:
         )
 
     def restore(self, settings: ComputationSettings) -> None:
-        """Eine Momentaufnahme zurueckschreiben - Vorlage fuer M2-4."""
+        """Eine Momentaufnahme zurueckschreiben."""
         self.set_averaging(
             settings.averaging.enabled, settings.averaging.type, settings.averaging.count
         )
@@ -1555,37 +1447,12 @@ class ComputationConfig:
 
 # ===========================================================================
 # Oberschwingungen ':HARMonics'
-# NEU (ROADMAP M2-1 Punkt 5, Rang 3 aus ANALYSE_FEHLENDE_FUNKTIONEN.md)
 # ===========================================================================
 #
-# "Der WT3000 wird haeufig gerade wegen Oberschwingungsmessung eingesetzt
-# (Netzqualitaet, Normpruefung) - ohne dieses Modul deckt der Treiber einen
-# der Hauptanwendungsfaelle des Geraets gar nicht ab" (Analyse 2.3).
-#
-# OPTION: Die ganze Gruppe verlangt '/G5' oder '/G6' (Handbuch 6-57: "valid
-# only when the advanced computation function (/G6 option) is installed").
-# Am eingemessenen Geraet ist '/G6' verbaut - '*OPT?' -> G6,B5,DT,C7,C5,CC -,
-# die Gruppe ist dort also ansprechbar, obwohl '/G5' fehlt. Geprueft wird das
-# an der Fassade (siehe Dateikopf), nicht hier.
-#
-# EINE HANDBUCHSTELLE, DIE MAN NICHT UEBERSEHEN DARF
-# --------------------------------------------------
-# Zur PLL-Quelle 'SAMPle' steht auf Seite 6-58: "If SAMPle is selected, it is
-# used in wide bandwidth harmonic measurement mode. In other measurement
-# modes, EXTernal is used. 'EXTernal' is also returned in response to a
-# query." Das Geraet antwortet also auf eine Abfrage moeglicherweise mit einem
-# ANDEREN Wert als dem gesetzten - und genau das ist der Fall, den die
-# Rueckleseprobe dieses Moduls sonst als Fehler meldet. 'set_pll_source()'
-# behandelt ihn deshalb ausdruecklich; ohne diese Ausnahme waere ein
-# vollkommen richtiger Aufruf am Geraet unbenutzbar.
-#
-# ZUSAMMENHANG MIT DEM CONDITION-REGISTER
-# ---------------------------------------
-# Fehlt an der eingestellten PLL-Quelle das Signal, meldet das Geraet Bit 7
-# des Condition-Registers. Der Treiber kennt dieses Bit laengst - es steht als
-# "Condition Bit 7 (PLLE): kein Signal an der PLL-Quelle" in
-# wt3000_common._CONDITION_BITS und geht ueber 'wt.log_condition()' ins
-# Protokoll. Wer 'set_pll_source()' benutzt, hat die Gegenprobe also schon.
+# Die Gruppe verlangt die Option '/G5' oder '/G6'; die Fassade prueft sie.
+# Bei PLL-Quelle SAMPle kann das Geraet ausserhalb des Wide-Band-Modus
+# EXTernal zurueckmelden. set_pll_source() akzeptiert diese dokumentierte
+# Abweichung. Ein fehlendes PLL-Signal erscheint zusaetzlich als Condition-Bit 7.
 
 
 class FrequencyBand(Enum):
@@ -2041,7 +1908,7 @@ class HarmonicsConfig:
         )
 
     def restore(self, settings: HarmonicsSettings) -> None:
-        """Eine Momentaufnahme zurueckschreiben - Vorlage fuer M2-4."""
+        """Eine Momentaufnahme zurueckschreiben."""
         self.set_band(settings.band)
         self.set_order_range(settings.order_min, settings.order_max)
         self.set_pll_source(settings.pll_source)

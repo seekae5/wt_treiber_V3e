@@ -1,21 +1,19 @@
 # =============================================================================
 # Datei: tests/test_geraetebezug.py
-# NEU (ROADMAP M1-3, Befund S-01): der Treiber arbeitet gegen DIESES Geraet.
+# Der Treiber muss gegen den aktuellen Zustand dieses Geraets arbeiten. Die
+# Tests decken zwei Varianten veralteter oder uneinheitlicher Geraetedaten ab:
 #
-# Zwei Befunde, ein gemeinsamer Kern - der Steckbrief war eine Momentaufnahme
-# des Verbindungsaufbaus, und nicht alle Fachobjekte benutzten ihn:
-#
-#   BEFUND 1  Nach einer Umverdrahtung stand in 'wt.device' und in den
+#   1  Nach einer Umverdrahtung stand in 'wt.device' und in den
 #             Wiring-Units von 'wt.ranges' weiterhin der alte Zustand.
 #             'expand_scope("SIGMA")' loeste auf die Elemente der ALTEN
 #             Verdrahtung auf - fehlerfrei, plausibel und falsch.
 #
-#   BEFUND 2  'InputConfig._elements_of("ALL")' lieferte fest (1, 2, 3, 4),
+#   2  'InputConfig._elements_of("ALL")' lieferte fest (1, 2, 3, 4),
 #             waehrend 'RangeAccess.expand_scope("ALL")' die bestueckten
 #             Elemente kannte. Auf einem 3-Element-Geraet adressierten die
 #             beiden Wege damit verschiedene Ziele.
 #
-# Beide sind gerätefrei nachstellbar, und genau das tut diese Datei.
+# Beide Faelle sind geraetefrei nachstellbar.
 # =============================================================================
 
 from __future__ import annotations
@@ -77,12 +75,12 @@ def fassade(transport: FakeTransport, **kwargs) -> WT3000:
 
 
 # ---------------------------------------------------------------------------
-# BEFUND 2 - dieselbe Elementliste fuer beide Wege
+# Dieselbe Elementliste fuer beide Wege
 # ---------------------------------------------------------------------------
 
 
 def test_beide_wege_meinen_dieselben_elemente():
-    """Der Befund in einer Zeile: 'ALL' hiess an zwei Stellen Verschiedenes."""
+    """'ALL' muss an beiden Stellen dasselbe bedeuten."""
     transport = VerdrahtbarerTransport(wiring="V3A3,NONE", modules="30,30,30,0")
     with fassade(transport) as wt:
         assert wt.device.elements == (1, 2, 3)
@@ -93,7 +91,7 @@ def test_beide_wege_meinen_dieselben_elemente():
 
 
 def test_sammelbereich_liest_kein_unbestuecktes_element_zurueck():
-    """Die sichtbare Folge des Befunds: eine Rueckleseprobe an Element 4.
+    """Rueckleseprobe an Element 4.
 
     Der Sammelknoten ':ALL' geht unveraendert ans Geraet - was 'ALL' dort
     bedeutet, entscheidet das Geraet. Falsch war die Gegenprobe danach: sie
@@ -115,7 +113,7 @@ def test_sammelbereich_liest_kein_unbestuecktes_element_zurueck():
 
 
 def test_nicht_bestuecktes_element_wird_abgelehnt():
-    """Dieselbe Regel wie in RangeAccess seit Befund A-03 - sie fehlte hier."""
+    """Dieselbe Elementpruefung wie in RangeAccess."""
     transport = VerdrahtbarerTransport(wiring="V3A3,NONE", modules="30,30,30,0")
     with fassade(transport) as wt:
         with wt.input.unlocked(GROUP_RANGE):
@@ -138,12 +136,12 @@ def test_von_hand_gebautes_inputconfig_verhaelt_sich_wie_bisher():
 
 
 # ---------------------------------------------------------------------------
-# BEFUND 1 - der Steckbrief bleibt aktuell
+# Der Steckbrief bleibt aktuell
 # ---------------------------------------------------------------------------
 
 
 def test_set_wiring_frischt_den_steckbrief_von_selbst_auf():
-    """Der Kern von Befund 1: kein Zutun des Anwenders noetig."""
+    """Die Aktualisierung braucht kein Zutun des Anwenders."""
     transport = VerdrahtbarerTransport()
     with fassade(transport) as wt:
         assert wt.device.wiring == ("V3A3", "P1W2")

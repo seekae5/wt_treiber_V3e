@@ -1,11 +1,7 @@
 # =============================================================================
 # Datei: tests/test_einheiten.py
-# NEU (ROADMAP M4-3, Maßnahme A5 aus
-# docs/BEWERTUNG_AUTOMATISIERTE_MESSABLAEUFE.md).
-#
-# Der Befund: eine Messdatei, in deren Kopf 'U1,I1,P1' steht, ist ohne
-# Zusatzwissen nicht eindeutig. Dass U in Volt und WH in Wattstunden kommt,
-# weiss der, der die Messung aufgesetzt hat - und niemand sonst.
+# Tests der Einheitentabelle und ihrer Ausgabe. Spaltennamen wie 'U1,I1,P1'
+# sind ohne Einheiten nicht eindeutig.
 #
 # Der Kern dieser Datei ist nicht die Tabelle, sondern eine Unterscheidung:
 #

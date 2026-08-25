@@ -1,21 +1,15 @@
 # =============================================================================
 # Datei: tests/test_fake_transport.py
-# NEU (ROADMAP M1-2): die Gegenprobe zum Transport-Protocol.
-#
-# Bisher setzte die Testsuite mit 'FakeSession' (tests/conftest.py) eine Ebene
-# ueber WTSession an. Damit blieb ungeprueft, was WTSession selbst durchsetzt:
-# Query-Regeln, Nur-Lesen-Sperre, Zusammenbau von Blockdaten ueber mehrere
-# Lesevorgaenge, Fehlerqueue und das Abraeumen verspaeteter Antworten.
-#
-# Mit 'FakeTransport' laeuft die komplette Kette geraetefrei:
+# Geraetefreie Gegenprobe zum Transport-Protocol. Sie deckt Query-Regeln,
+# Nur-Lesen-Sperre, mehrteilige Blockdaten, Fehlerqueue und verspaetete
+# Antworten auf der kompletten Kette ab:
 #   FakeTransport -> WTSession -> ItemTable -> Messschleife -> CsvSink
-# Das ist das 'Fertig, wenn' aus M1-2.
 # =============================================================================
 
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timezone  # NEU (P-3)
+from datetime import datetime, timezone
 
 import pytest
 
@@ -26,23 +20,23 @@ from wt3000_scpi.wt3000_core import (
     TmctlError,
     Transport,
     WTConfig,
-    WTError,  # NEU (P-3)
+    WTError,
     WTSession,
 )
 from wt3000_scpi.wt3000_measure import (
-    Sample,  # NEU (M4-1)
+    Sample,
     run_measurement_loop,
     write_metadata,
 )
-from wt3000_scpi.wt3000_sinks import CsvSink  # NEU (M4-2)
+from wt3000_scpi.wt3000_sinks import CsvSink
 from wt3000_scpi.wt3000_numeric import (
     FLOAT_NO_DATA,
     FLOAT_OVERRANGE,
     ItemTable,
-    NumericValue,  # NEU (P-3)
+    NumericValue,
     ValueStatus,
     parse_float_block,
-    read_numeric_values,  # NEU (P-3)
+    read_numeric_values,
 )
 from wt3000_scpi.wt3000_transport import FakeTransport, TmctlTransport, float_block
 
@@ -167,7 +161,7 @@ def test_antwort_ohne_blockheader_wird_als_protokollfehler_gemeldet():
 
 
 # ---------------------------------------------------------------------------
-# NEU (P-4, siehe PLAN_BEFUNDE_2026-08-19.md): der Blockheader vollstaendig.
+# Vollstaendiger Blockheader.
 #
 # Bisher war nur die Ziffernanzahl abgesichert. Das Laengenfeld stand
 # ungeschuetzt - eine abgerissene oder verstuemmelte Antwort kam als nackter
@@ -275,7 +269,7 @@ def test_drain_nach_fehler_raeumt_die_verspaetete_antwort_ab():
 
 
 def test_simulierter_verbindungsabbruch_kommt_als_tmctlerror_an():
-    """Vorarbeit fuer M3-4 - der Abbruch muss oben als WTError ankommen."""
+    """Der Abbruch muss an der oeffentlichen Grenze als WTError ankommen."""
     _, sess = session({":RATE?": "1"}, fail_commands=[":RATE?"])
     with pytest.raises(TmctlError):
         sess.query(":RATE?")
@@ -307,7 +301,7 @@ def test_wiederherstellung_schreibt_nur_die_abweichenden_items():
 
 
 # ---------------------------------------------------------------------------
-# Die vollstaendige Messschleife - das 'Fertig, wenn' aus M1-2
+# Die vollstaendige Messschleife
 # ---------------------------------------------------------------------------
 
 
@@ -328,7 +322,7 @@ def messschleifen_antworten(zyklen: int) -> dict:
         ":NUMeric:HOLD?": "0",
         ":NUMeric:NORMal:VALue?": bloecke,
         ":STATus:CONDition?": "16",
-        # NEU (ROADMAP M3-3): Geraeterate fuer die Taktpruefung der Schleife.
+        # Geraeterate fuer die Taktpruefung der Schleife.
         ":RATE?": "1.000E+00",
     }
 
@@ -340,8 +334,7 @@ def test_vollstaendige_messschleife_bis_in_die_csv(tmp_path):
     tabelle = ItemTable.read_from_device(sess)
     ziel = tmp_path / "messung.csv"
 
-    # UEBERARBEITET (M4-2): die Senke wird nur noch gebaut - oeffnen und
-    # schliessen erledigt die Messschleife.
+    # Die Messschleife oeffnet und schliesst die Senke.
     stats = run_measurement_loop(
         session=sess,
         table=tabelle,
@@ -379,7 +372,7 @@ def test_vollstaendige_messschleife_bis_in_die_csv(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# NEU (P-3, siehe PLAN_BEFUNDE_2026-08-19.md): die CSV-Zeile gegen den Kopf.
+# CSV-Zeile gegen den Spaltenkopf pruefen.
 #
 # Der teuerste Fehler dieser Codebasis waere eine stillschweigend verrutschte
 # Spalte: jede Zeile sieht fuer sich plausibel aus, die Verschiebung zeigt sich
@@ -393,7 +386,7 @@ def messwerte(anzahl: int) -> list[NumericValue]:
 
 
 def test_zu_wenige_werte_werden_nicht_geschrieben(tmp_path):
-    """P-3: sonst rutscht 'status_flags' unter eine Messwertspalte."""
+    """Sonst rutscht 'status_flags' unter eine Messwertspalte."""
     ziel = tmp_path / "kurz.csv"
     with CsvSink(ziel) as recorder:
         recorder.open(["U1", "I1", "P1"])
@@ -455,7 +448,7 @@ def test_passende_anzahl_wird_unveraendert_geschrieben(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# NEU (P-3): abweichende Werteanzahl faellt schon beim Lesen auf
+# Abweichende Werteanzahl faellt bereits beim Lesen auf.
 # ---------------------------------------------------------------------------
 
 
@@ -513,7 +506,7 @@ def test_hold_wird_auch_bei_einem_fehler_mitten_im_zyklus_abgeschaltet():
         {
             ":NUMeric:HOLD?": "0",
             ":NUMeric:NORMal:VALue?": float_block([1.0]),
-            # NEU (ROADMAP M3-3): Taktpruefung der Schleife.
+            # Taktpruefung der Schleife.
             ":RATE?": "1.000E+00",
         },
         fail_commands=[":NUMeric:NORMal:VALue?"],
@@ -523,7 +516,7 @@ def test_hold_wird_auch_bei_einem_fehler_mitten_im_zyklus_abgeschaltet():
     class Verweigerer:
         """Eine Senke, die den ganzen Vertrag erfuellt und beim Schreiben knallt.
 
-        UEBERARBEITET (M4-1/M4-2): hiess write_row() und hatte sonst nichts.
+        Minimaler Sink fuer den Lebenszyklustest.
         Jetzt braucht sie open() und close(), weil die Messschleife beides
         ruft - womit der Test nebenbei belegt, dass eine voellig fremde Klasse
         als SampleSink taugt, ohne von irgendetwas zu erben.
@@ -556,7 +549,7 @@ def test_hold_wird_auch_bei_einem_fehler_mitten_im_zyklus_abgeschaltet():
             log_every=0,
         )
     assert transport.written[-1] == ":NUMeric:HOLD OFF"
-    # NEU (M4-2): Die Schleife raeumt die Senke auch dann ab, wenn der Zyklus
+    # Die Schleife raeumt die Senke auch dann ab, wenn der Zyklus
     # mitten im Lesen scheitert - sonst bliebe eine Datei offen zurueck.
     assert senke.geoeffnet and senke.geschlossen
 

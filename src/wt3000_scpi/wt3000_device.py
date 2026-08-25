@@ -1,17 +1,5 @@
-# =============================================================================
-# Datei: wt3000_device.py
-# NEU (ROADMAP M1-1): Layer 4 - die Fassade.
-#
-# Hintergrund. Bis hierher musste jeder Anwender Transport, Sitzung,
-# InputConfig, RangeAccess und die Wiring-Units von Hand zusammenstecken - so,
-# wie es die fuenf Stufenskripte jeweils erneut vormachen. Besonders die
-# Verdrahtung der Wiring-Units war eine Stolperfalle: wer
-#     RangeAccess(session, allow_changes=True)
-# ohne 'sigma_members' anlegt, bekommt bei jedem SIGMA-Scope einen Fehler, und
-# zwar erst mitten im Ablauf. Die Zuordnung steht am Geraet zur Verfuegung -
-# sie zu erfragen war nur nirgends vorgesehen.
-#
-# Diese Datei ist der einzige Einstiegspunkt, den ein Anwender braucht:
+# Oeffentliche Fassade: verdrahtet Transport, Sitzung und Fachobjekte aus dem
+# am Geraet gelesenen Steckbrief. Normaler Einstieg:
 #
 #     from wt3000_scpi import WT3000, Quantity
 #
@@ -20,29 +8,13 @@
 #         print(wt.input.get_wiring())
 #         print(wt.ranges.dump(Quantity.VOLTAGE))
 #
-# Fuenf Zeilen, danach ist sauber getrennt. Schreibend geht es nur, wenn beide
-# Schloesser bewusst geoeffnet werden - die Voreinstellung ist read_only:
+# Schreibzugriffe verlangen das bewusste Oeffnen beider Sperren:
 #
 #     with WT3000.connect(read_only=False, allow_changes=True) as wt:
 #         ...
 #
-# SCHICHTUNG. Layer 4 darf aus allen tieferen Schichten importieren und wird
-# von keiner importiert. Die Stufenskripte bleiben unveraendert bestehen; sie
-# sind ab jetzt Beispiele fuer den Weg ohne Fassade, nicht mehr der einzige.
-#
-# BEWUSST NICHT hier erledigt (jeweils eigener Meilenstein):
-#   M1-3  TEILWEISE erledigt: die verbauten Geraeteoptionen werden seit dem
-#         21.08.2026 beim Verbinden erhoben ('*OPT?') und sind ueber
-#         DeviceInfo.supports()/require_option() abfragbar - Voraussetzung
-#         fuer jede optionsgebundene Kommandogruppe. Offen bleiben die
-#         Bereichstabellen nach Modultyp, InputConfig._elements_of('ALL')
-#         (Befund B-12) und die Modellpruefung beim Verbinden.
-#   M1-4  ensure_protocol_state() - der Sollzustand wird hier geprueft
-#         (check_protocol_state), aber nicht hergestellt.
-#   M1-5  drain_after_failure() wird inzwischen an vier Stellen aufgerufen
-#         (hier zweimal, in write_metadata() und in device_update_rate());
-#         eine allgemeine Zustaendigkeitsregel fehlt weiterhin - Befund S-03.
-# =============================================================================
+# Die Fassade darf alle tieferen Schichten importieren, wird aber von keiner
+# importiert. Stufenskripte bleiben Beispiele fuer die direkte Nutzung.
 
 from __future__ import annotations
 
@@ -62,7 +34,6 @@ from .wt3000_common import (
 )
 from .wt3000_backup import SessionBackup, device_fingerprint
 from .wt3000_core import TmctlTransport, Transport, WTConfig, WTError, WTSession
-# NEU (M3-2/M2-1): die Geraetegruppen jenseits von ':INPut' und ':NUMeric'.
 from .wt3000_deviceconfig import ComputationConfig, HarmonicsConfig, IntegrationConfig
 from .wt3000_input import ALL_GROUPS as ALL_INPUT_GROUPS
 from .wt3000_input import InputConfig, WiringUnit
@@ -78,8 +49,6 @@ from .wt3000_itemspec import (
 )
 from .wt3000_measure import (
     LoopStatistics,
-    # NEU (ROADMAP M3-1): die steuerbare Messung und der Generator, auf dem
-    # sie sitzt. 'Sample' kommt dazu, weil stream() ihn als Elementtyp fuehrt.
     Measurement,
     NumericHold,
     Sample,
@@ -121,31 +90,22 @@ INPUT_GROUPS: tuple[str, ...] = tuple(sorted(ALL_INPUT_GROUPS))
 
 # ---------------------------------------------------------------------------
 # Geraeteoptionen
-# NEU (ROADMAP M1-3 "Optionen und Firmware erfassen (pruefen)")
 # ---------------------------------------------------------------------------
-#
-# Zehn der 22 SCPI-Kommandogruppen des WT3000 haengen an einer verbauten
-# Hardwareoption (docs/ANALYSE_FEHLENDE_FUNKTIONEN.md, Abschnitt 0.1). Fehlt
-# sie, ist das Kommando nicht etwa wirkungslos: das Geraet legt einen Eintrag
-# in die Fehlerqueue und ANTWORTET NICHT - der Query laeuft in den Timeout.
-# Ohne diese Tabelle faellt das erst dort auf, und zwar mit einer Meldung, die
-# nach Verbindungsabbruch aussieht statt nach fehlender Option. Genau deshalb
-# steht Rang 0 der Analyse vor den Raengen 3, 5, 8 und 10: erst wissen, was
-# das Geraet kann, dann daran bauen.
+# Optionsabhaengige Gruppen antworten ohne passende Hardware teils nicht und
+# sehen dann wie ein Verbindungsfehler aus. Deshalb wird die Voraussetzung vor
+# dem ersten Fachkommando gegen '*OPT?' geprueft.
 #
 # '*OPT?' liefert die Bestueckung als kommagetrennte Liste (Handbuch 6-115),
 # am eingemessenen Geraet 'G6,B5,DT,C7,C5,CC'; ist keine Option verbaut,
 # antwortet das Geraet mit '0'. Die Abfrage ist ein Common Command und selbst
 # an keine Option gebunden - sie funktioniert also immer.
 #
-# ':MOTor' FEHLT IN DIESER TABELLE, UND ZWAR MIT ABSICHT. Das Handbuch nennt
+# ':MOTor' fehlt absichtlich in dieser Tabelle. Das Handbuch nennt
 # zu '*OPT?' zwar eine "motor evaluation function (MTR)", am realen Geraet
 # (Protokoll vom 21.08.2026, tools/hardware/probe_capabilities.py) trug dieses
 # Indiz aber nicht: '*OPT?' meldete KEIN MTR, ':MOTor:PM?' antwortete
 # trotzdem. Zuverlaessig war dort der Modellcode aus '*IDN?' ('760304-40-MV').
-# Stuende ':MOTor' mit ('MTR',) in der Tabelle, wuerde der Treiber eine
-# vorhandene Gruppe abweisen - schlimmer als gar keine Pruefung. Die Gruppe
-# wird deshalb in 'supports()' gesondert behandelt: Modellcode ODER MTR.
+# Die Gruppe wird deshalb gesondert behandelt: Modellcode ODER MTR.
 
 
 #: Kommandogruppe -> Optionscodes, von denen MINDESTENS EINER verbaut sein muss.
@@ -224,24 +184,15 @@ def required_options(group: str) -> tuple[str, ...] | None:
 
 @dataclass(frozen=True)
 class DeviceInfo:
-    """Was beim Verbinden einmalig ueber das Geraet erhoben wird.
+    """Steckbrief, mit dem die Fassade ihre Fachobjekte verdrahtet.
 
-    Bewusst klein gehalten (ROADMAP M1-1): hier steht genau das, was die
-    Fassade braucht, um die Fachobjekte zu verdrahten.
-
-    UEBERARBEITET (M1-3, Teil "Optionen und Firmware erfassen"): die verbauten
-    Geraeteoptionen gehoeren inzwischen dazu. Sie stehen hier und nicht an
-    einer zweiten Stelle, weil sie dieselbe Eigenschaft haben wie Verdrahtung
-    und Modultypen - einmal beim Verbinden erhoben, danach unveraenderlich.
-    Wer wissen will, ob eine Kommandogruppe an diesem Geraet ueberhaupt
-    ansprechbar ist, fragt 'supports()' oder laesst 'require_option()' den
-    Fehler mit Begruendung werfen:
+    Identitaet, Optionen, Verdrahtung und Module werden gemeinsam gehalten.
+    Die Verfuegbarkeit einer Kommandogruppe pruefen 'supports()' und
+    'require_option()':
 
         if wt.device.supports(":HARMonics"):
             ...
 
-    Offen aus M1-3 bleiben die Bereichstabellen nach Modultyp und die
-    Modellpruefung beim Verbinden.
     """
 
     #: Rohantwort auf '*IDN?'. 'unbekannt', wenn die Abfrage fehlgeschlagen ist.
@@ -281,17 +232,10 @@ class DeviceInfo:
     def read(cls, session: WTSession, previous: "DeviceInfo | None" = None) -> "DeviceInfo":
         """Steckbrief vom Geraet lesen. Reine Queries, veraendert nichts.
 
-        NEU (ROADMAP M1-3): 'previous' ist ein bereits erhobener Steckbrief
-        DERSELBEN Sitzung. Ist er angegeben, werden '*IDN?' und '*OPT?' nicht
-        erneut gefragt, sondern uebernommen - Modell, Seriennummer, Firmware
-        und verbaute Optionen aendern sich waehrend einer Verbindung nicht.
-
-        Das ist nicht nur eine Ersparnis von zwei Abfragen. Ein erneutes
-        '*IDN?', das diesmal fehlschlaegt, wuerde eine bereits bekannte
-        Identitaet gegen 'unbekannt' eintauschen und mit 'options_known=False'
-        die Optionspruefung stillegen - eine Auffrischung wuerde den
-        Steckbrief also schlechter machen als er war. Gebraucht wird
-        'previous' von 'WT3000.refresh_device()' nach einer Umverdrahtung.
+        'previous' muss aus derselben Sitzung stammen. Identitaet und Optionen
+        werden daraus uebernommen, weil sie sich waehrend einer Verbindung
+        nicht aendern und ein spaeterer Queryfehler bekannte Daten nicht
+        verschlechtern darf. 'refresh_device()' nutzt dies nach Wiring-Aenderungen.
 
         Die Fehlerbehandlung ist mit Absicht zweigeteilt:
 
@@ -301,13 +245,8 @@ class DeviceInfo:
         Fassade die Elementzuordnung raten, und geraten wird in diesem Treiber
         nichts. Ein Fehler dort kommt deshalb als WTError heraus.
 
-        NEU (M1-3): nach jedem der beiden informativen Queries steht im
-        Fehlerfall 'drain_after_failure()'. Der Grund ist nicht Kosmetik -
-        eine verspaetete Antwort wuerde sonst den NAECHSTEN Query beantworten,
-        und der naechste ist hier entweder '*OPT?' (der dann eine
-        Geraetekennung als Optionsliste laese) oder ':INPut:WIRing?' (das die
-        Verdrahtung traegt). Der ganze Steckbrief waere um eine Position
-        verschoben, ohne dass irgendwo ein Fehler auftraete.
+        Fehlgeschlagene informative Queries bereinigen die Antwortqueue, damit
+        eine verspaetete Antwort nicht den folgenden Steckbriefwert verschiebt.
         """
         identity = "unbekannt"
         if previous is not None:
@@ -323,11 +262,8 @@ class DeviceInfo:
         while len(parts) < 4:
             parts.append("")
 
-        # NEU (M1-3): die verbaute Bestueckung. Zur Reihenfolge sagt das
-        # Handbuch (6-115): "The *OPT? query must be the last query of the
-        # program message." Gemeint ist die einzelne Programmnachricht, und
-        # WTSession sendet ohnehin genau einen Query je Nachricht - die Regel
-        # ist hier also schon durch die Bauart eingehalten.
+        # Das Handbuch verlangt '*OPT?' am Ende einer Programmnachricht.
+        # WTSession sendet ohnehin genau einen Query je Nachricht.
         options_raw = "unbekannt"
         options: frozenset[str] = frozenset()
         options_known = False
@@ -338,9 +274,8 @@ class DeviceInfo:
         else:
             options_raw, options, options_known = cls._read_options(session)
 
-        # Rein lesende Sicht: dieses Objekt benutzt die vorhandenen Parser aus
-        # wt3000_input, statt ':INPut:MODUle?' ein viertes Mal selbst zu
-        # zerlegen (vgl. Befund B-03).
+        # Vorhandene Input-Parser wiederverwenden, statt Modul- und Wiring-
+        # Antworten hier erneut zu zerlegen.
         # Bewusst OHNE 'on_wiring_changed': dieses InputConfig liest nur und
         # ruft deshalb nie zurueck. Andernfalls entstuende eine Schleife -
         # refresh_device() baut den Steckbrief, der Steckbrief baut ein
@@ -384,10 +319,8 @@ class DeviceInfo:
     def _read_options(cls, session: WTSession) -> tuple[str, frozenset[str], bool]:
         """'*OPT?' abfragen. Rohantwort, Codes und ob es geklappt hat.
 
-        NEU (ROADMAP M1-3): aus 'read()' herausgezogen, seit der Steckbrief
-        auch aufgefrischt werden kann - dort wird dieser Weg uebersprungen.
-        Der Ablauf ist unveraendert: informativ, also protokollieren und
-        nachraeumen statt abbrechen.
+        Die Angabe ist informativ: Fehler werden protokolliert und die Queue
+        bereinigt, statt den Verbindungsaufbau abzubrechen.
         """
         try:
             options_raw = session.query("*OPT?")
@@ -443,7 +376,7 @@ class DeviceInfo:
         """True, wenn dieses Element bestueckt ist."""
         return element in self.elements
 
-    # -- Optionen (M1-3) ----------------------------------------------------
+    # -- Optionen -----------------------------------------------------------
 
     def has_option(self, code: str) -> bool:
         """True, wenn dieser Optionscode als verbaut gemeldet wurde.
@@ -651,18 +584,10 @@ class ItemAccess:
     ) -> Iterator[ItemTable]:
         """Tabelle setzen, Block ausfuehren, Ausgangszustand garantiert zurueck.
 
-        Das Gegenstueck zu 'applied_ranges()' fuer die Item-Tabelle: derselbe
-        try/finally-Ablauf, den Stufe 3 und Stufe 4 heute jeweils von Hand
-        nachbauen - sichern, Tail sichern, Schreibprobe, anwenden,
-        verifizieren, Nutzblock, wiederherstellen.
-
-        Die Wiederherstellung laeuft im finally und damit auch bei Strg+C.
-
-        UEBERARBEITET (P-2, siehe PLAN_BEFUNDE_2026-08-19.md): Was 'garantiert'
-        hier bedeutet, ist jetzt auch im Fehlerfall wahr. Wer diesen Block ohne
-        Ausnahme verlaesst, darf sich darauf verlassen, dass die Item-Tabelle
-        wieder im Ausgangszustand steht. Misslingt die Wiederherstellung, kommt
-        eine WTError heraus - siehe die Begruendung im finally.
+        Analog zu 'applied_ranges()': sichern, Tail sichern, Schreibprobe,
+        anwenden, verifizieren, Nutzblock und im 'finally' wiederherstellen.
+        Ein normal verlassenes 'with' garantiert den Ausgangszustand; Fehler
+        beim Restore werden als 'WTError' weitergegeben.
         """
         self._require_writable()
 
@@ -676,19 +601,9 @@ class ItemAccess:
             self.apply(target, backup)
             yield target
         finally:
-            # UEBERARBEITET (P-2, siehe PLAN_BEFUNDE_2026-08-19.md): Der Fehler
-            # wurde hier bisher nur protokolliert und dann verschluckt. Ein
-            # Aufrufer konnte den Kontextmanager also normal verlassen, obwohl
-            # die Item-Tabelle nicht wiederhergestellt war - genau das, was der
-            # Docstring ausschliesst. 'applied_ranges()' in wt3000_ranging.py
-            # macht es an derselben Stelle seit jeher richtig und loest erneut
-            # aus; die beiden Ablaeufe verhalten sich jetzt gleich.
-            #
-            # Zur Fehlerverkettung: eine im finally ausgeloeste Ausnahme traegt
-            # eine bereits unterwegs befindliche automatisch als '__context__'
-            # mit. Schlaegt also erst der Nutzblock fehl und dann die
-            # Wiederherstellung, zeigt der Traceback beide - ohne Zutun und
-            # ohne Abhaengigkeit von Python 3.11.
+            # Eine Restore-Ausnahme darf nicht verschluckt werden. Tritt sie
+            # nach einem Fehler im Nutzblock auf, erhaelt Python diesen
+            # automatisch als '__context__'.
             try:
                 self.restore(backup, tail, force=force_restore)
 
@@ -727,10 +642,7 @@ class ItemAccess:
 class MeasureControl:
     """Messwerte lesen und aufzeichnen.
 
-    ZUM UMFANG (UEBERARBEITET, ROADMAP M3-1, 25.08.2026): Hier stand bis
-    hierher, die Messschleife sei "erreichbar, nicht steuerbar". Das gilt
-    nicht mehr - es gibt jetzt drei Wege, und die Wahl zwischen ihnen ist eine
-    Frage danach, WER den Takt treibt:
+    Drei Wege unterscheiden sich danach, wer den Takt treibt:
 
         record()   blockierend. Der Aufrufer wartet, das Ende steht vorab
                    fest (Limit) oder kommt per Strg+C. Der einfachste Weg und
@@ -743,36 +655,17 @@ class MeasureControl:
                    Sample entscheiden - und die einzige der drei Formen, bei
                    der die Sitzung zwischen zwei Samples frei bleibt.
 
-    ENTSCHIEDEN (21.08.2026), frueher hier als offene Zustaendigkeitsfrage
-    notiert: Die Geraetesteuerung (':INTEGrate:STARt / :STOP / :RESet') sitzt
-    NICHT hier, sondern in 'wt3000_deviceconfig.IntegrationConfig' - dem
-    Modul, das ROADMAP Abschnitt 3 unter M2-1 ohnehin vorsieht. Der damals
-    hier notierte Vorschlag ("die Knotenebene gehoert nach unten in die
-    Konfigurationsschicht") ist genau so umgesetzt worden, und die befuerchtete
-    vierte Parserkopie ist nicht entstanden: das neue Modul benutzt
-    ausschliesslich die Regeln aus wt3000_common.
-
-    Was hier bleibt, ist die Leseseite: die aufgelaufenen Werte kommen ueber
-    die Item-Tabelle wie alle Messwerte. Das passende Profil steht in
-    'wt3000_measure.build_integration_profile()' und ist ueber
-    'ItemAccess.integration_profile()' erreichbar - also neben
-    'standard_profile()', wo ein Messprofil hingehoert.
-
-    OFFEN (ROADMAP M0-3) - blockiert die Erprobung von M3-2, nicht dessen
-    Umsetzung: jedes Kommando dort ist ein Set-Kommando (auch '*CLS'), verlangt
-    also read_only=False. Ob das Geraet Set-Kommandos ueber Ethernet ohne
-    ':COMMunicate:REMote ON' annimmt, ist unbeantwortet - siehe
-    WTConfig.use_remote. Gegen FakeTransport laesst sich M3-2 schreiben und
-    pruefen; belegen laesst es sich erst am Geraet.
+    Integration wird in 'IntegrationConfig' gesteuert; ihre Werte werden ueber
+    die normale Item-Tabelle und 'integration_profile()' gelesen. Schreibende
+    Integrationskommandos verlangen 'read_only=False'. Ob sie ueber Ethernet
+    REMOTE benoetigen, ist noch am Geraet zu pruefen.
     """
 
     def __init__(self, session: WTSession, items: ItemAccess, read_only: bool = True) -> None:
         self._session = session
         self._items = items
         self._read_only = read_only
-        # NEU (ROADMAP M3-1): die zuletzt gestartete Hintergrundmessung. Wird
-        # gebraucht, damit 'WT3000.close()' sie beenden kann, bevor es selbst
-        # ans Geraet geht - siehe stop_active().
+        # close() muss eine Hintergrundmessung vor eigenen Geraetezugriffen beenden.
         self._active: Measurement | None = None
 
     # -- Laufende Hintergrundmessung ----------------------------------------
@@ -846,16 +739,12 @@ class MeasureControl:
         log_every: int = 0,
         metadata_path: Path | None = None,
         parameters: dict | None = None,
-        # NEU (ROADMAP M3-3): durchgereicht an run_measurement_loop().
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
     ) -> LoopStatistics:
         """Messschleife in eine beliebige Senke schreiben.
 
-        UEBERARBEITET (ROADMAP M4-2): nahm bis hierher einen 'csv_path' und
-        legte die CSV selbst an - damit war die Fassade auf ein Ausgabeformat
-        festgelegt, obwohl das Zielbild ausdruecklich 'CSV, mit Platz fuer
-        weitere Formate' verlangt. Jetzt nimmt sie die Senke entgegen:
+        Die Methode nimmt eine beliebige Senke entgegen:
 
             wt.measure.record(CsvSink(pfad), tabelle)
             wt.measure.record(JsonlSink(pfad), tabelle)
@@ -869,7 +758,7 @@ class MeasureControl:
         oder bis Strg+C. Ohne Limit laeuft sie unbegrenzt weiter - das ist
         Absicht, aber beim Einbau in fremden Code selten gewollt.
 
-        NEU (ROADMAP M3-3): 'interval_s' ist der Takt DIESER SCHLEIFE und
+        'interval_s' ist der Takt DIESER SCHLEIFE und
         nicht die Rate des Geraets - die steht auf ':RATE' und wird ueber
         'wt.input.set_update_rate()' gestellt. Beide werden ab jetzt
         gegeneinander geprueft ('check_update_rate'), und Zyklen, in denen
@@ -911,7 +800,7 @@ class MeasureControl:
             mark_duplicates=mark_duplicates,
         )
 
-    # -- Steuerbare Messung (M3-1) ------------------------------------------
+    # -- Steuerbare Messung -------------------------------------------------
 
     def start(
         self,
@@ -928,7 +817,7 @@ class MeasureControl:
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
     ) -> Measurement:
-        """Eine Messung im Hintergrund starten und sofort zurueckkehren (M3-1).
+        """Eine Messung im Hintergrund starten und sofort zurueckkehren.
 
         Das Gegenstueck zu 'record()': dieselben Angaben, aber der Aufrufer
         behaelt die Kontrolle.
@@ -1003,7 +892,7 @@ class MeasureControl:
         # aufrufen KANN - der Docstring unten verlangt es fuer den Abbruch
         # mitten im Rumpf.
     ) -> Generator[Sample, None, None]:
-        """Messwerte als Generator - der einfache Weg ohne Hintergrundthread (M3-1).
+        """Messwerte als Generator - der einfache Weg ohne Hintergrundthread.
 
             for sample in wt.measure.stream(tabelle, max_samples=10):
                 print(sample.values[0])
@@ -1063,16 +952,13 @@ class MeasureControl:
         parameters: dict | None = None,
         check_update_rate: bool = True,
         mark_duplicates: bool = True,
-        # NEU (ROADMAP M4-3): zweite Kopfzeile mit den Einheiten. Nicht die
-        # Voreinstellung, weil es eine Formataenderung ist - siehe CsvSink.
+        # Optionale zweite Kopfzeile; nicht Default, weil sie das CSV-Format aendert.
         unit_row: bool = False,
     ) -> LoopStatistics:
         """Messschleife in eine CSV schreiben - der haeufigste Fall.
 
-        NEU (ROADMAP M4-2): duenne Weiterleitung an 'record()' mit einer
-        fertig gebauten 'CsvSink'. Sie besteht, damit der Normalfall ein
-        Aufruf bleibt und nicht zwei werden - wer nur eine CSV will, soll sich
-        mit dem Sink-Begriff gar nicht befassen muessen.
+        Duenne Weiterleitung an 'record()' mit einer fertigen 'CsvSink', damit
+        der CSV-Normalfall keinen Umgang mit dem Sink-Vertrag verlangt.
         """
         return self.record(
             CsvSink(csv_path, delimiter=delimiter, unit_row=unit_row),
@@ -1149,25 +1035,12 @@ class WT3000:
         elif self._config.use_remote:
             _log.info("Nur-Lesen-Sitzung: ':COMMunicate:REMote ON' wird nicht gesendet")
 
-        # UEBERARBEITET (P-1, siehe PLAN_BEFUNDE_2026-08-19.md): ab hier laeuft
-        # der Rest des Konstruktors unter Aufraeumschutz.
-        #
-        # Vorher stand DeviceInfo.read() ungeschuetzt hinter enable_remote().
-        # Scheiterte eine der dortigen Pflichtabfragen - ':INPut:WIRing?' oder
-        # ':INPut:MODUle?' -, verliess die Ausnahme den Konstruktor, ohne dass
-        # ':COMMunicate:REMote OFF' je gesendet wurde: das Bedienfeld blieb
-        # gesperrt zurueck. close() konnte das nicht auffangen, weil bei einem
-        # gescheiterten Konstruktor gar kein Objekt entsteht, an dem close()
-        # aufrufbar waere.
-        #
-        # Die Reparatur sitzt bewusst HIER und nicht in from_config(): nur so
-        # sind alle drei Wege abgedeckt - from_config(), from_transport() und
-        # die direkte Konstruktion. from_transport() raeumte bisher gar nicht
-        # auf, weil es den Transport nicht besitzt.
+        # Ab REMOTE ON steht der Konstruktor unter Aufraeumschutz. Bei einem
+        # gescheiterten Konstruktor gibt es kein Objekt, dessen close() REMOTE
+        # zuruecknehmen koennte; deshalb liegt die Garantie direkt hier und
+        # gilt fuer alle Erzeugungswege.
         try:
-            # ROADMAP M1-1: die bisher manuelle Verdrahtung
-            # sigma_members_from_units(cfg.get_wiring_units()) passiert hier -
-            # einmalig, beim Verbinden, fuer alle Fachobjekte gemeinsam.
+            # Steckbrief und SIGMA-Zuordnung einmal fuer alle Fachobjekte lesen.
             self._device = DeviceInfo.read(self._session)
             self._device.log_summary()
         except BaseException:
@@ -1203,11 +1076,7 @@ class WT3000:
             with WT3000.connect() as wt:
                 ...
         """
-        # UEBERARBEITET (P-7, siehe PLAN_BEFUNDE_2026-08-19.md): Grundlage ist
-        # jetzt die Auflaesungskette aus WTConfig.from_environment() -
-        # ausdruecklicher Parameter vor Umgebungsvariable vor
-        # Konfigurationsdatei vor Voreinstellung. Ein blosses WTConfig() traegt
-        # seit P-7 keine IP mehr; connect() ohne Argumente holt sie von dort.
+        # Aufloesung: Parameter, Umgebung, Konfigurationsdatei, Voreinstellung.
         config = WTConfig.from_environment(
             ip=ip,
             dll_path=dll_path,
@@ -1231,19 +1100,8 @@ class WT3000:
                 owns_transport=True,
             )
         except BaseException:
-            # Der Transport steht schon, die Sitzung ist aber nicht zustande
-            # gekommen (z.B. weil ':INPut:WIRing?' nicht antwortet). Ohne
-            # dieses except bliebe die Verbindung offen.
-            #
-            # UEBERARBEITET (P-1, siehe PLAN_BEFUNDE_2026-08-19.md): Der
-            # Kommentar behauptete hier zusaetzlich, dieser Block verhindere
-            # auch, dass das Geraet in Fernsteuerung stehen bleibt. Das hat er
-            # nie getan - ein 'REMote OFF' kam an dieser Stelle nicht vor, und
-            # nach transport.close() waere es ohnehin ins Leere gegangen.
-            # Zustaendig ist jetzt der Konstruktor selbst; er schaltet die
-            # Fernsteuerung ab, BEVOR die Ausnahme hier ankommt. Dieser Block
-            # kuemmert sich nur noch um den Transport, den nur dieser Weg
-            # besitzt.
+            # Der Konstruktor raeumt REMOTE auf; dieser Erzeugungsweg besitzt
+            # zusaetzlich den bereits geoeffneten Transport und schliesst ihn.
             transport.close()
             raise
 
@@ -1258,8 +1116,8 @@ class WT3000:
     ) -> "WT3000":
         """Auf einem bereits bestehenden Transport aufsetzen.
 
-        Damit laeuft die Fassade auch auf 'FakeTransport' (M1-2) und spaeter
-        auf einem Socket- oder VISA-Transport. Voreinstellung ist hier
+        Damit laeuft die Fassade auch auf 'FakeTransport' und weiteren
+        Implementierungen des Transportvertrags. Voreinstellung ist hier
         owns_transport=False: wer den Transport mitbringt, schliesst ihn auch.
         """
         return cls(
@@ -1284,12 +1142,7 @@ class WT3000:
 
     @property
     def device(self) -> DeviceInfo:
-        """Steckbrief - beim Verbinden erhoben, ueber refresh_device() aktuell.
-
-        UEBERARBEITET (ROADMAP M1-3): hiess "einmalig beim Verbinden erhoben",
-        und das war woertlich zu nehmen - nach einer Umverdrahtung stand hier
-        weiterhin der Zustand des Verbindungsaufbaus.
-        """
+        """Steckbrief; beim Verbinden erhoben und per refresh_device() aktualisiert."""
         return self._device
 
     @property
@@ -1304,13 +1157,7 @@ class WT3000:
 
     @property
     def input(self) -> InputConfig:
-        """Eingangs- und Messkonfiguration (':INPut'), fertig verdrahtet.
-
-        UEBERARBEITET (ROADMAP M1-3, Befund S-01): 'fertig verdrahtet' heisst
-        jetzt auch, dass dieses Objekt dieselbe Elementliste benutzt wie
-        'wt.ranges' - und dass eine Umverdrahtung ueber 'set_wiring()' den
-        Steckbrief auffrischt, statt ihn stillschweigend veralten zu lassen.
-        """
+        """Eingangskonfiguration mit gemeinsamer, aktuell gehaltener Elementliste."""
         self._require_open()
         if self._input is None:
             self._input = InputConfig(
@@ -1351,7 +1198,7 @@ class WT3000:
     def integration(self) -> IntegrationConfig:
         """Integrationsfunktion (':INTEGrate') - Wh- und Ah-Messung steuern.
 
-        NEU (ROADMAP M3-2, Rang 1 der Analyse). Die Gruppe braucht keine
+        Die Gruppe braucht keine
         Geraeteoption; 'wt.device.supports(\":INTEGrate\")' ist immer wahr und
         wird hier deshalb nicht abgefragt.
 
@@ -1371,9 +1218,8 @@ class WT3000:
     def computation(self) -> ComputationConfig:
         """Rechenfunktionen (':MEASure') - Averaging, Wirkungsgrad, Frequenzquelle.
 
-        NEU (ROADMAP M2-1 Punkt 2/3, Rang 2 der Analyse). Hier zeigt sich, was
-        der Steckbrief aus M1-3 wert ist: die Fassade reicht drei Dinge hinein,
-        die das Fachmodul selbst nicht wissen kann -
+        Die Fassade reicht drei Geraetemerkmale hinein, die das Fachmodul
+        nicht selbst erheben soll:
 
           * die bestueckte Elementliste, gegen die 'P<x>'/'U<x>' geprueft wird
             (dieselbe, die auch 'wt.ranges' bekommt),
@@ -1382,10 +1228,8 @@ class WT3000:
           * ob das Geraet die Motorvariante traegt - nur dann ist 'PM' als
             Glied einer Wirkungsgradgleichung zulaessig.
 
-        Beide Faehigkeiten gehen als bool und nicht als 'vielleicht' hinein:
-        'supports()' und 'is_motor_model' haben die Unbekannt-Frage bereits
-        entschieden (siehe DeviceInfo.supports - unbekannt gilt dort als
-        'nicht ausgeschlossen').
+        'supports()' und 'is_motor_model' behandeln unbekannte Faehigkeiten
+        konservativ als "nicht ausgeschlossen".
         """
         self._require_open()
         if self._computation is None:
@@ -1402,13 +1246,8 @@ class WT3000:
     def harmonics(self) -> HarmonicsConfig:
         """Oberschwingungsanalyse (':HARMonics') - Bandbreite, Ordnungen, PLL.
 
-        NEU (ROADMAP M2-1 Punkt 5, Rang 3 der Analyse). Dies ist die ERSTE
-        Stelle im Treiber, an der 'require_option()' aus M1-3 tatsaechlich
-        gebraucht wird: die ganze Gruppe verlangt '/G5' oder '/G6'. Fehlt
-        beides, antwortet das Geraet auf kein einziges Kommando dieser Gruppe -
-        der Query laeuft in den Timeout und die Meldung sieht aus wie ein
-        Verbindungsabbruch. Die Pruefung hier macht daraus einen Satz, der die
-        Ursache benennt.
+        Die Gruppe verlangt '/G5' oder '/G6'. Ohne Vorabpruefung kann ein
+        Query in einen scheinbaren Verbindungstimeout laufen.
 
         Sie steht bewusst in der Fassade und nicht im Fachmodul: 'DeviceInfo'
         ist Layer 4, 'HarmonicsConfig' Layer 2 - und dort gehoert der
@@ -1436,7 +1275,7 @@ class WT3000:
     # -- Ablaeufe -----------------------------------------------------------
 
     def backup(self, path: Path | None = None) -> SessionBackup:
-        """Den ganzen Sitzungszustand sichern (M2-4).
+        """Den ganzen Sitzungszustand sichern.
 
         Erfasst wird alles, was diese Fassade erreichen kann: Steckbrief,
         Eingangskonfiguration, Messbereiche, Item-Tabelle samt Tail und die
@@ -1480,7 +1319,7 @@ class WT3000:
         return backup
 
     def restore_backup(self, backup: SessionBackup | Path, force: bool = False) -> list[str]:
-        """Einen gesicherten Zustand zurueckschreiben und pruefen (M2-4).
+        """Einen gesicherten Zustand zurueckschreiben und pruefen.
 
         Rueckgabe: die Abweichungen, die NACH dem Wiederherstellen noch
         bestehen - leere Liste heisst, das Geraet steht wieder wie im Backup.
@@ -1531,7 +1370,6 @@ class WT3000:
         )
 
     # -- Gerätesteckbrief auffrischen ---------------------------------------
-    # NEU (ROADMAP M1-3, Befund S-01)
 
     def refresh_device(self) -> DeviceInfo:
         """Verdrahtung, Module und Elementliste neu lesen und weitergeben.
@@ -1609,10 +1447,9 @@ class WT3000:
         Feinheiten: mit Headern scheitert das Parsen der Item-Tabelle, im
         ASCii-Format kommt kein Blockheader, den query_block() zerlegen kann.
 
-        Diese Methode ist der designierte Ort fuer Befund B-14 (dieselbe
-        Pruefung liegt heute in stage2/3/4 in drei leicht abweichenden
-        Fassungen) und die Grundlage fuer M1-4, das den Sollzustand dann nicht
-        nur prueft, sondern herstellt und beim Verlassen zuruecknimmt.
+        Diese zentrale Pruefung ersetzt abweichende Fassungen in den
+        Stufenskripten. 'ensured_protocol_state()' kann den Zustand zusaetzlich
+        temporaer herstellen.
         """
         header = self._session.query(":COMMunicate:HEADer?")
         if header.strip() != "0":
@@ -1631,7 +1468,6 @@ class WT3000:
         self.log_condition()
 
     # -- Protokollzustand herstellen ----------------------------------------
-    # NEU (ROADMAP M1-4, Maßnahme A8)
 
     #: Der Sollzustand: Knoten -> (Sollwert als Parameter, Prueffunktion).
     #
@@ -1653,11 +1489,8 @@ class WT3000:
     def protocol_state(self) -> dict[str, str]:
         """Ist-Zustand der drei Protokollknoten lesen. Veraendert nichts.
 
-        NEU (ROADMAP M1-4). Die Antworten werden durch
-        'strip_response_header()' geschickt, denn genau der Fall, um den es
-        hier geht - ':COMMunicate:HEADer' steht auf 1 - laesst das Geraet
-        ':COMMUNICATE:HEADER 1' statt '1' antworten (Handbuch IM WT3001E-17EN,
-        Seite 6-24).
+        Antworten laufen durch 'strip_response_header()', weil bei aktivem
+        Header etwa ':COMMUNICATE:HEADER 1' statt '1' zurueckkommt.
         """
         self._require_open()
         return {
@@ -1668,14 +1501,6 @@ class WT3000:
     @contextmanager
     def ensured_protocol_state(self) -> Iterator[dict[str, str]]:
         """Sollzustand herstellen, Block ausfuehren, Ausgangszustand zurueck.
-
-        NEU (ROADMAP M1-4). Bis hierher konnte 'check_protocol_state()' den
-        Sollzustand nur PRUEFEN. Wer ein Geraet vorfand, an dem jemand am
-        Bedienfeld ':COMMunicate:HEADer 1' eingestellt hatte, bekam einen
-        klaren Abbruch - und keinen Weg, weiterzuarbeiten, obwohl der Treiber
-        die Ursache mit einem einzigen Kommando selbst beheben koennte. Fuer
-        einen automatisierten Lauf war das eine haeufige und vermeidbare
-        Abbruchursache.
 
             with WT3000.connect(read_only=False, allow_changes=True) as wt:
                 with wt.ensured_protocol_state() as geaendert:
@@ -1796,9 +1621,8 @@ class WT3000:
 
     def log_condition(self) -> int:
         """':STATus:CONDition?' auswerten und Auffaelligkeiten protokollieren."""
-        # UEBERARBEITET (Schritt 5b, Befund A-06 / S-02): parse_condition()
-        # statt int(), und die Bitauswertung kommt aus wt3000_common statt
-        # aus einer vierten hauseigenen Fassung. Bit 15 (POV) fehlte hier.
+        # Gemeinsamer Parser und gemeinsame Bitauswertung verhindern
+        # abweichende Condition-Regeln zwischen den Einstiegspunkten.
         bits = parse_condition(self._session.query(":STATus:CONDition?"))
         for meldung in condition_warnings(bits):
             _log.warning("%s", meldung)
@@ -1837,8 +1661,7 @@ class WT3000:
         if self._closed:
             raise WTError("Diese WT3000-Sitzung ist bereits geschlossen")
 
-    # UEBERARBEITET (P-1, siehe PLAN_BEFUNDE_2026-08-19.md): Gegenstueck zu
-    # close() fuer den Fall, dass der Konstruktor nicht durchlaeuft.
+    # Gegenstueck zu close(), falls der Konstruktor nicht durchlaeuft.
     def _release_remote_after_failure(self) -> None:
         """Fernsteuerung zuruecknehmen, wenn der Verbindungsaufbau scheitert.
 
@@ -1877,10 +1700,8 @@ class WT3000:
             return
         self._closed = True
 
-        # NEU (ROADMAP M3-1): ZUERST. Eine laufende Hintergrundmessung besitzt
-        # die Sitzung; jeder Schritt unten wuerde sonst an der eigenen Sperre
-        # scheitern, und die Messung liefe als Daemon-Thread weiter, waehrend
-        # der Transport unter ihr geschlossen wird.
+        # Zuerst den Sitzungsbesitz des Mess-Threads beenden; sonst scheitern
+        # die folgenden Geraetezugriffe an der eigenen Sperre.
         if self._measure is not None:
             self._measure.stop_active()
 

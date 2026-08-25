@@ -1,6 +1,6 @@
 # =============================================================================
 # Datei: tests/conftest.py
-# NEU (Punkt 3, TOOLS-1/TOOLS-2): gemeinsame Bausteine der Testsuite.
+# Gemeinsame Bausteine der Testsuite.
 #
 # Die gesamte Suite laeuft OHNE Geraet und ohne tmctl.dll. Wo ein Objekt eine
 # WTSession erwartet, tritt FakeSession an ihre Stelle: sie beantwortet Queries
@@ -57,13 +57,8 @@ from wt3000_scpi.wt3000_transport import (  # noqa: E402
 
 
 def _kein_geraetezugriff(self, *args, **kwargs):
-    # UEBERARBEITET: Die Meldung nannte als einzige Ursache "Skript liegt unter
-    # tests/" und schickte damit in die Irre, sobald sie aus einem Skript kam,
-    # das laengst unter tools/hardware/ liegt. Ausgeloest wird die Sperre
-    # naemlich nicht vom Ablageort, sondern davon, DASS diese Datei importiert
-    # wurde - ein einziges 'from tests.conftest import ...' genuegt. Genau das
-    # ist bei tools/hardware/probe_current_range.py passiert, durch eine
-    # automatische Import-Ergaenzung der Entwicklungsumgebung.
+    # Die Sperre entsteht durch den Import dieser Datei, nicht durch den
+    # Ablageort des aufrufenden Skripts; die Meldung nennt beide Abhilfen.
     raise RuntimeError(
         "TmctlTransport() ist stillgelegt, weil tests/conftest.py importiert "
         "wurde: die Testsuite laeuft ohne Geraet und ohne tmctl.dll.\n"
@@ -80,12 +75,8 @@ def _kein_geraetezugriff(self, *args, **kwargs):
 
 #: Der echte Konstruktor, bevor er stillgelegt wird.
 #
-# NEU (Schritt 5 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-04): Die
-# Fehlerwege IM Konstruktor - fehlende Bitness, fehlende abhaengige DLL,
-# Nicht-Windows - sind nur pruefbar, wenn man ihn tatsaechlich betritt. Genau
-# EIN Testmodul darf das (test_transport_fehlerpfade.py), und es kommt dabei
-# nie bis zu 'TmcInitialize': 'ct.WinDLL' wird vorher ersetzt, sodass der Lauf
-# im Ladeteil endet. Eine Verbindung entsteht also auch dort nicht.
+# Nur test_transport_fehlerpfade.py darf diesen Konstruktor fuer die Ladefehler
+# betreten. ct.WinDLL wird dort ersetzt; eine Verbindung entsteht nie.
 ECHTER_TMCTL_KONSTRUKTOR = TmctlTransport.__init__
 
 TmctlTransport.__init__ = _kein_geraetezugriff
@@ -122,7 +113,7 @@ class FakeSession:
 
 # Bereichsantworten des vorliegenden Aufbaus: Elemente 1-3 haengen an externen
 # Stromsensoren (10 V), Element 4 direkt (5 A). Genau die Konstellation, an der
-# RangeBackup.capture() vor der Korrektur zu RANGEIO-2 abgebrochen ist.
+# RangeBackup.capture() seine Sensorbehandlung zeigen muss.
 SENSOR_ELEMENTS: tuple[int, ...] = (1, 2, 3)
 
 
@@ -206,20 +197,9 @@ def input_snapshot(*elements, **overrides):
 
 # ---------------------------------------------------------------------------
 # Stufen- und Geraeteskripte vollstaendig durchspielen
-# NEU (Schritt 0c aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-13)
 # ---------------------------------------------------------------------------
 #
-# Die Vorrichtung stammt aus test_stage5b_write_probe.py. Sie hat dort gezeigt,
-# dass ein main() vollstaendig gegen FakeTransport laufen kann - und war damit
-# lange der einzige Weg, ein Stufenskript ueberhaupt zu pruefen: von den fuenf
-# Stufen war genau eine abgedeckt, und die vier ungeprueften waren die, die
-# schreiben.
-#
-# Sie steht ab hier hier, weil sie inzwischen von drei Testmodulen gebraucht
-# wird. Voraussetzung dafuer war Schritt 0b: Stufe 2 und 3 fuehrten
-# 'output_dir()' als Aufruf INNERHALB von main() statt als Modulkonstante, und
-# damit trug das Rezept fuer sie nicht - es waere ein anderer Name zu ersetzen
-# gewesen.
+# Gemeinsame Vorrichtung fuer vollstaendige main()-Laeufe mit FakeTransport.
 
 
 def geraeteskript(name: str):
@@ -316,7 +296,6 @@ def stufenlauf(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------------------
 # Geraetemodell fuer vollstaendige main()-Laeufe
-# NEU (Schritt 7 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-13)
 # ---------------------------------------------------------------------------
 #
 # Beides stand in test_device_facade.py und wird ab Schritt 7 auch von den
@@ -331,10 +310,7 @@ def stufenlauf(monkeypatch, tmp_path):
 
 IDN = "YOKOGAWA,WT3000,C1B234567,F2.11"
 
-# NEU (M1-3): die Optionsantwort des Modellgeraets. Uebernommen vom real
-# eingemessenen Geraet (docs/ANALYSE_FEHLENDE_FUNKTIONEN.md, Abschnitt 0.3):
-# G6 und CC verbaut, FL und DA nicht - damit deckt die Antworttabelle beide
-# Richtungen ab, statt nur den freundlichen Fall.
+# Optionsantwort des Modellgeraets: G6 und CC sind verbaut, FL und DA nicht.
 OPT = "G6,B5,DT,C7,C5,CC"
 
 _ITEM_NODE = re.compile(r"^:NUMERIC:NORMAL:ITEM(\d+)$")
@@ -352,8 +328,7 @@ def base_responses(
     table.update(
         {
             "*IDN": IDN,
-            # NEU (M1-3): DeviceInfo.read() fragt seit der Optionserfassung
-            # zwei Common Commands ab statt einem.
+            # DeviceInfo.read() fragt Identitaet und Optionen ab.
             "*OPT": options,
             ":INPUT:WIRING": wiring,
             ":INPUT:MODULE": modules,
@@ -361,10 +336,7 @@ def base_responses(
             ":NUMERIC:FORMAT": numeric_format,
             ":STATUS:CONDITION": "0",
             ":NUMERIC:HOLD": "0",
-            # UEBERARBEITET (Schritt 7): ab hier auch das, was die
-            # Stufenskripte brauchen und die Fassade nicht abfragt -
-            # ':RATE?' (Stufe 2 und 4) und die elf Metadaten-Abfragen
-            # von write_metadata() (Stufe 4).
+            # Zusaetzlich Rate und Metadaten-Abfragen der Stufenskripte.
             ":RATE": "1.000E+00",
             ":COMMUNICATE": "0,0,0",
             ":INPUT": "ELEMENT1,1000V;ELEMENT2,1000V;ELEMENT3,1000V;ELEMENT4,1000V",
@@ -425,7 +397,6 @@ class ItemTableTransport(FakeTransport):
 
 # ---------------------------------------------------------------------------
 # Antworttabelle der Integrationsgruppe
-# NEU (ROADMAP M3-2, Rang 1 der Analyse)
 # ---------------------------------------------------------------------------
 #
 # Die Voreinstellungen sind KEINE Erfindung: es sind die Werte, die das reale
@@ -535,7 +506,6 @@ def integrationsantworten() -> dict[str, str]:
 
 # ---------------------------------------------------------------------------
 # Antworttabelle fuer die Eingangskonfiguration (Stufe 5)
-# NEU (Schritt 7 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-13)
 # ---------------------------------------------------------------------------
 
 

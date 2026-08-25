@@ -1,7 +1,6 @@
 # =============================================================================
 # Datei: tests/test_computation.py
-# NEU (ROADMAP M2-1 Punkt 2/3, Rang 2 aus docs/ANALYSE_FEHLENDE_FUNKTIONEN.md):
-# die Rechengruppe ':MEASure' geraetefrei pruefen.
+# Geraetefreie Tests der Rechengruppe ':MEASure'.
 #
 # Der Schwerpunkt liegt woanders als bei der Integration. Dort ging es um
 # Zustandsuebergaenge und darum, dass ein Lauf zuverlaessig endet. Hier geht es
@@ -13,10 +12,8 @@
 #   * 'PB' von der Elementzahl, 'PM' von der Motorvariante,
 #   * TYPE3 von der Rechenoption /G6.
 #
-# Genau diese Abhaengigkeiten sind der Grund, warum die Gruppe ueberhaupt ein
-# Fachobjekt bekommt und nicht als Handvoll roher Kommandos durchgereicht
-# wird. Entsprechend pruefen die meisten Saetze hier, dass ein unzulaessiger
-# Wert das Geraet GAR NICHT ERREICHT.
+# Die Tests stellen insbesondere sicher, dass unzulaessige Werte das Geraet
+# gar nicht erreichen.
 # =============================================================================
 
 from __future__ import annotations

@@ -1,14 +1,12 @@
 # =============================================================================
 # Datei: tests/test_scope_and_items.py
-# NEU (Punkt 3, TOOLS-2): canonical_scope() / canonical_element() und
-#                         items_match().
+# Tests fuer canonical_scope(), canonical_element() und items_match().
 #
 # Kern dieser Datei ist die SIGMA/SIGMB-Regel. Der urspruengliche Bug -
 # beidseitiges Praefixmatching setzte SigmaA und SigmaB gleich - war bei der
 # Verdrahtung V3A3,P1W2 ein stiller Vertauscher von Elementen 1-3 gegen
-# Element 4. Die Regel liegt derzeit in drei Kopien im Projekt (COMMON-1,
-# ITEMSPEC-2, INPUT-2); die Tests pruefen sie deshalb an ALLEN drei Stellen,
-# bis Punkt 6 der Bearbeitungsreihenfolge sie auf eine reduziert.
+# Element 4. Die Tests pruefen die gemeinsame Regel an ihren oeffentlichen
+# Verwendungsstellen.
 # =============================================================================
 
 from __future__ import annotations

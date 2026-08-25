@@ -1,18 +1,7 @@
 # =============================================================================
 # Datei: tests/test_output_location.py
-# NEU: wohin Protokolle, Sicherungen und Messdateien geschrieben werden.
-#
-# Anlass aus der Praxis. Die Stufen- und Geraeteskripte legten ihre Ausgaben
-# unter 'Path.cwd()' ab - also dort, wo der Prozess zufaellig gestartet wurde.
-# Entwicklungsumgebungen starten ein Skript ueblicherweise in SEINEM
-# Verzeichnis, und so entstand ein zweites 'konfiguration/' unter
-# tools/hardware/, waehrend dasselbe Skript aus der Projektwurzel heraus in
-# das richtige schrieb. Gemerkt hat das niemand: beide Verzeichnisse heissen
-# gleich, und beide sind von '.gitignore' erfasst.
-#
-# Dieselbe Ursache hatte der zweite Ausfall desselben Tages - 'wt3000.json'
-# wurde nur im Arbeitsverzeichnis gesucht (siehe test_config_resolution.py).
-# Ein- und Ausgabeseite haengen jetzt beide nicht mehr am Startverzeichnis.
+# Tests fuer die Ablage von Protokollen, Sicherungen und Messdateien. Ein- und
+# Ausgabepfade duerfen nicht vom zufaelligen Arbeitsverzeichnis abhaengen.
 # =============================================================================
 
 from __future__ import annotations

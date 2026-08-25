@@ -14,12 +14,11 @@
 
 from __future__ import annotations
 
-import logging          # UEBERARBEITET (F-08)
-import sys              # UEBERARBEITET (F-08)
-from pathlib import Path  # UEBERARBEITET (F-08)
+import logging
+import sys
+from pathlib import Path
 from typing import Final
 
-# UEBERARBEITET (Punkt 4, src-Layout): paketrelative Importe.
 from .wt3000_core import WTError
 
 # ---------------------------------------------------------------------------
@@ -149,15 +148,9 @@ def parse_nr3(response: str, context: str = "") -> float:
 def parse_nr1(response: str, context: str = "") -> int:
     """Ganzzahlantwort (Registerinhalt, Zaehler) in einen int wandeln.
 
-    NEU (Schritt 5b aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-06).
-    Gegenstueck zu parse_nr3() fuer die Faelle, in denen eine Gleitkommazahl
-    nicht das Richtige ist - ein Statusregister ist eine Bitmaske, kein Messwert.
-
-    Bis hierher gingen sechs Stellen im Bestand direkt ueber 'int(...)' bzw.
-    'float(...)' auf eine Geraeteantwort. Antwortet das Geraet unerwartet - mit
-    Header (weil jemand ':COMMunicate:HEADer 1' gesetzt hat), leer, oder mit
-    einer Mehrfachantwort -, verliess ein ValueError die Kette und passierte
-    'except WTError' in allen sieben Skripten.
+    Gegenstueck zu parse_nr3() fuer Bitmasken und Zaehler. Unerwartete
+    Antworten werden mit Kontext als WTError statt als roher ValueError
+    gemeldet.
     """
     text = strip_response_header(response)
     try:
@@ -172,14 +165,7 @@ def parse_condition(response: str) -> int:
     return parse_nr1(response, ":STATus:CONDition")
 
 
-#: Bits des Condition-Registers, die eine Messreihe unbrauchbar machen koennen.
-#
-# UEBERARBEITET (Schritt 5b, Befund A-06 / S-02): diese Auswertung lag VIERMAL
-# im Bestand - stage2, stage3, stage4 und WT3000.log_condition() -, in leicht
-# abweichenden Fassungen. Nur Stufe 4 kannte Bit 15 (POV); Stufe 2, Stufe 3 und
-# die Fassade verschwiegen es. Ein Peak Over am Eingang ist aber genau die
-# Auffaelligkeit, die eine Messreihe unbrauchbar macht - sie in drei von vier
-# Faellen nicht zu melden, war die schlechteste der moeglichen Aufteilungen.
+#: Zentral gepflegte Bits, die eine Messreihe unbrauchbar machen koennen.
 _CONDITION_BITS: tuple[tuple[int, str], ...] = (
     (1 << 4, "Condition Bit 4 (FOV): Frequenzmessung im Fehler"),
     (1 << 7, "Condition Bit 7 (PLLE): kein Signal an der PLL-Quelle"),
@@ -201,11 +187,7 @@ def condition_warnings(bits: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Aufzaehlungswerte
-# NEU (M2-5-Teil, gebraucht ab M2-1/M3-2): die Regel lag bisher in
-# wt3000_input.py und war damit fuer ein zweites Fachmodul derselben Schicht
-# unerreichbar - LAYERS verbietet den Geschwisterimport, und zwar zu Recht.
-# Sie ist geraeteunabhaengig und gehoert deshalb hierher.
+# Geraeteunabhaengige Aufzaehlungswerte
 # ---------------------------------------------------------------------------
 
 
@@ -273,20 +255,8 @@ def values_match(requested: float, actual: float, tolerance: float = 1e-3) -> bo
 
 
 # ---------------------------------------------------------------------------
-# Protokollierung
-# UEBERARBEITET (F-08, siehe AENDERUNGEN_2026-08-18.md)
+# Protokollierung und Ausgabeorte
 # ---------------------------------------------------------------------------
-#
-# Diese Funktion stand bis hierher in ALLEN FUENF Stufenskripten - byteweise
-# identisch, 546 Zeichen, fuenf Kopien. Genau die Konstellation, aus der der
-# Klon unter 'Build/' entstanden ist: eine Kopie wird angepasst, vier bleiben
-# stehen. Sie liegt jetzt einmal hier.
-#
-# Warum in wt3000_common und nicht in einem eigenen Modul: die Funktion haengt
-# ausschliesslich an der Standardbibliothek, kennt kein Geraet und kein
-# Kommando - das ist die Definition dieses Moduls. Ein zusaetzliches Modul
-# haette dafuer die Schichtliste in __init__.py und in
-# tests/test_package_layout.py mitgezogen, ohne etwas zu gewinnen.
 
 
 # Dateien, an denen eine Projektwurzel erkennbar ist. 'pyproject.toml' zuerst,
@@ -297,16 +267,6 @@ _PROJEKT_MARKER: Final[tuple[str, ...]] = ("pyproject.toml", ".git", "wt3000.jso
 
 def find_project_root(start: Path | None = None) -> Path | None:
     """Projektwurzel suchen: vom Startverzeichnis aufwaerts bis zur Dateiwurzel.
-
-    NEU. Gegenstueck zu 'WTConfig.config_search_paths()' auf der Ausgabeseite,
-    und aus demselben Anlass entstanden: die Stufen- und Geraeteskripte legten
-    ihre Protokolle, Sicherungen und Messdateien unter 'Path.cwd()' ab - also
-    dort, wo der Prozess zufaellig gestartet wurde. Entwicklungsumgebungen
-    starten ein Skript ueblicherweise in SEINEM Verzeichnis, und so entstand
-    ein zweites 'konfiguration/' unter tools/hardware/, waehrend dasselbe
-    Skript aus der Projektwurzel heraus in das richtige schrieb. Gemerkt hat
-    das niemand, weil beide Verzeichnisse gleich heissen und beide von
-    '.gitignore' erfasst sind.
 
     Rueckgabe 'None', wenn kein Marker gefunden wird. Das ist kein Fehler,
     sondern der Normalfall fuer ein installiertes Paket ausserhalb des

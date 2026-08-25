@@ -1,20 +1,14 @@
 # =============================================================================
 # Datei: tests/test_input_parsers.py
-# NEU (Punkt 3, TOOLS-1): uebernimmt die vier Pruefbloecke, die bisher als
-# Modulebene-'assert' in tools_import_check.py standen, als regulaere Testfaelle.
-#
-# Damit entfaellt dort auch der Zugriff auf die private Funktion
-# _check_allowed(): die Stellwertpruefung wird hier ueber den oeffentlichen
-# Weg (set_voltage_range gegen die Tabelle) mitgeprueft und zusaetzlich direkt,
-# klar als Weisskasten-Test gekennzeichnet.
+# Regulaere Tests der Eingabeparser und Stellwertpruefung. _check_allowed()
+# wird zusaetzlich zum oeffentlichen Setter gezielt als Weisskasten getestet.
 # =============================================================================
 
 from __future__ import annotations
 
 import pytest
 
-# NEU (M0-1): die Formatierung der Bereichsparameter liegt jetzt in
-# wt3000_common. Der Import von format_voltage aus wt3000_input ist entfallen.
+# Gemeinsame Formatierung der Bereichsparameter.
 from wt3000_scpi.wt3000_common import format_nrf
 from wt3000_scpi.wt3000_core import WTError
 from wt3000_scpi.wt3000_input import (

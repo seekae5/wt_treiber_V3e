@@ -1,25 +1,12 @@
 # =============================================================================
 # Datei: tests/test_stage_durchlauf.py
-# NEU (Schritt 7 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-13): die vier
-# bisher ungeprueften Stufen laufen vollstaendig gegen FakeTransport durch.
+# Vollstaendige Durchlaeufe der Stufenskripte gegen FakeTransport.
 #
-# Der Befund A-13: von den fuenf Stufenskripten war genau EINES geprueft
-# (Stufe 5b, seit test_stage5b_write_probe.py). Die vier ungepruefeten waren
-# die, die SCHREIBEN - Item-Tabelle in Stufe 3 und 4, ':NUMeric:HOLD' in
-# Stufe 4. Die Befunde A-01 und A-06 sassen alle in dieser ungepruefeten Menge.
+# Geprueft wird der Ablauf, nicht die separat abgedeckte Fachlogik: main()
+# laeuft durch, REMOTE wird geloest, die Item-Tabelle restauriert und die
+# Nur-Lesen-Zusage eingehalten.
 #
-# Schritt 1 und 5 haben daraus Ausschnitte geprueft: den REMOTE-Pfad und den
-# Kopf von main(). Was fehlte, ist der GLATTE WEG - dass main() von vorn bis
-# hinten durchlaeuft, 0 zurueckgibt und das Geraet dabei so hinterlaesst, wie
-# es war. Genau das ist die Zusage, die in jedem Dateikopf steht.
-#
-# WAS DIESE DATEI PRUEFT und was nicht: sie prueft den ABLAUF, nicht die
-# Fachlogik. Ob 'ItemTable.from_response()' richtig parst, steht in
-# test_numeric_parser.py; ob 'InputSnapshot.diff()' richtig vergleicht, in
-# test_input_snapshot.py. Hier geht es um die vier Fragen aus dem Plan:
-# laeuft main() durch, wird REMOTE zurueckgenommen, steht die Item-Tabelle
-# danach wieder auf dem Ausgangsstand, und sagt der Dateikopf die Wahrheit
-# ueber das, was gesendet wurde.
+# Fachdetails stehen in den jeweils zustaendigen Tests.
 # =============================================================================
 
 from __future__ import annotations

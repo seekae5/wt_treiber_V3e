@@ -1,8 +1,6 @@
 # =============================================================================
 # Datei: tests/test_messsteuerung.py
-# NEU (ROADMAP M3-1): die steuerbare Messung - 'Measurement' mit start(),
-# stop(), wait() und is_running, der Generator 'stream()' und der
-# Sitzungsbesitz aus Maßnahme A2.
+# Steuerbare Messung: Measurement, stream() und Sitzungsbesitz.
 #
 # Diese Datei prueft VIER Zusagen, und drei davon lassen sich nur nebenlaeufig
 # pruefen:

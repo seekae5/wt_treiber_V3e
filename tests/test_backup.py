@@ -1,7 +1,6 @@
 # =============================================================================
 # Datei: tests/test_backup.py
-# NEU (ROADMAP M2-4, Rang 6 aus docs/ANALYSE_FEHLENDE_FUNKTIONEN.md):
-# den Sitzungs-Sicherungspunkt geraetefrei pruefen.
+# Geraetefreie Tests des Sitzungs-Sicherungspunkts.
 #
 # Ein Backup ist die einzige Sache in diesem Treiber, die man erst dann
 # braucht, wenn schon etwas schiefgegangen ist - und dann muss sie stimmen.

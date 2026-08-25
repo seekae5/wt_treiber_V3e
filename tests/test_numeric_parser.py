@@ -1,10 +1,10 @@
 # =============================================================================
 # Datei: tests/test_numeric_parser.py
-# NEU (Punkt 3, TOOLS-2): parse_float_block(), ItemTable.from_response(),
-#                         ItemTable.map_values().
+# Tests fuer parse_float_block(), ItemTable.from_response() und
+# ItemTable.map_values().
 #
 # Diese drei entscheiden, welche Zahl unter welchem Namen in der CSV landet.
-# Sie brauchen kein Geraet - und waren bisher trotzdem ungetestet.
+# Sie brauchen kein Geraet.
 # =============================================================================
 
 from __future__ import annotations

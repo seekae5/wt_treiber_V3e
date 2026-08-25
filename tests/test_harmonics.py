@@ -1,7 +1,6 @@
 # =============================================================================
 # Datei: tests/test_harmonics.py
-# NEU (ROADMAP M2-1 Punkt 5, Rang 3 aus docs/ANALYSE_FEHLENDE_FUNKTIONEN.md):
-# die Oberschwingungsanalyse ':HARMonics' geraetefrei pruefen.
+# Geraetefreie Tests der Oberschwingungsanalyse ':HARMonics'.
 #
 # Drei Dinge unterscheiden diese Gruppe von den beiden vorherigen, und um sie
 # geht es hier:
@@ -9,9 +8,7 @@
 #   1. SIE VERLANGT EINE GERAETEOPTION ('/G5' oder '/G6'). Fehlt sie,
 #      antwortet das Geraet auf kein Kommando der Gruppe - der Query laeuft in
 #      den Timeout und sieht aus wie ein Verbindungsabbruch. Die Fassade faengt
-#      das mit 'require_option()' ab. Das ist die erste Stelle im Treiber, an
-#      der die Optionserfassung aus M1-3 tatsaechlich gebraucht wird, und sie
-#      wird hier in beide Richtungen geprueft.
+#      das mit 'require_option()' ab; beide Richtungen werden geprueft.
 #   2. Das Geraet MELDET BEI EINER PLL-QUELLE ETWAS ANDERES ZURUECK, als man
 #      gesetzt hat ('SAMPle' -> 'EXTernal', Handbuch 6-58). Eine
 #      Rueckleseprobe, die das nicht weiss, macht einen richtigen Aufruf

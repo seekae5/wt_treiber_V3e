@@ -1,21 +1,8 @@
 # =============================================================================
 # Datei: tests/test_applied_ranges.py
-# NEU (Maßnahme A6 aus docs/BEWERTUNG_AUTOMATISIERTE_MESSABLAEUFE.md):
-# der Rueckstellpfad der Messbereiche.
-#
-# Der Befund, der dazu gefuehrt hat: 'wt3000_ranging.py' hatte mit 60 % die
-# schlechteste Zeilenabdeckung des Pakets, und die Luecke lag genau auf
-# 'apply_plan', 'verify_plan', 'restore_ranges' und 'applied_ranges' - also
-# auf der Zusage, mit der die README fuer diesen Treiber wirbt:
-#
-#     "Jede Aenderung ist umkehrbar. [...] Ein Block, den man ohne Fehler
-#      verlaesst, hat den Ausgangszustand also tatsaechlich zurueckgestellt."
-#
-# Getestet war davon nur der 'validate()'-Waechter VOR dem Schreiben. Das
-# Gegenstueck fuer die Item-Tabelle ('ItemAccess.applied') und der
-# Sitzungs-Sicherungspunkt ('SessionBackup') sind seit jeher abgedeckt; die
-# Bereiche - der Pfad, der am eingemessenen Geraet die Messbereiche verstellt -
-# waren es nicht.
+# Rueckstellpfad der Messbereiche: Anwenden, Verifizieren und Restaurieren
+# muessen die Zusage einhalten, dass ein sauber verlassener Kontext den
+# Ausgangszustand wiederherstellt.
 #
 # ZUM AUFBAU. Eine Antworttabelle genuegt hier nicht: Verifikation und
 # Wiederherstellung LESEN ZURUECK, was sie geschrieben haben. Gegen eine

@@ -40,10 +40,8 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-# UEBERARBEITET (Punkt 4, src-Layout): paketrelative Importe.
-# Start ab jetzt ueber 'python -m wt3000_scpi.stage5b_range_probe' - ein direkter
-# Aufruf der Datei kann relative Importe nicht aufloesen.
-from .wt3000_common import output_dir, setup_logging  # UEBERARBEITET (F-08)
+# Paketmodule werden mit 'python -m wt3000_scpi.stage5b_range_probe' gestartet.
+from .wt3000_common import output_dir, setup_logging
 from .wt3000_core import (
     TmctlTransport,
     WTConfig,
@@ -51,7 +49,6 @@ from .wt3000_core import (
     WTSession,
     config_file_in_use,
 )
-# UEBERARBEITET (F-09): probe_write_capability -> probe_range_write_capability
 from .wt3000_ranging import RangeBackup, probe_range_write_capability
 from .wt3000_rangeio import Quantity, RangeAccess
 
@@ -59,12 +56,7 @@ from .wt3000_rangeio import Quantity, RangeAccess
 # Laufparameter
 # ---------------------------------------------------------------------------
 
-# Zielverzeichnis fuer Bericht, Backup und Protokoll.
-# UEBERARBEITET: Ablage an der Projektwurzel statt an 'Path.cwd()'.
-# Bis hierher hing das am Arbeitsverzeichnis - ein Start aus einem
-# Unterverzeichnis (Entwicklungsumgebungen tun das standardmaessig) legte
-# ein zweites gleichnamiges Verzeichnis dort an. Siehe
-# wt3000_common.output_dir().
+# Zielverzeichnis fuer Bericht, Backup und Protokoll, relativ zur Projektwurzel.
 OUTPUT_DIR: Path = output_dir("konfiguration")
 
 # Der Spannungsbereich dieses Elements wird bei --write-probe mit seinem
@@ -178,25 +170,8 @@ def main(enable_write_probe: bool = False) -> int:
         log.info("Stufe 5b - Messbereiche erfassen (nur Lesen, keine Schreibprobe)")
 
     try:
-        # UEBERARBEITET (Schritt 3 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund
-        # A-08): die Aufloesungskette steht jetzt INNERHALB des try und HINTER
-        # setup_logging(). Bis hierher war sie der erste Aufruf von Layer 4 nach
-        # Layer 0 - und der einzige, der ausserhalb jeder Absicherung und vor
-        # der Einrichtung des Protokolls lag.
-        #
-        # Sie kann drei WTError werfen: nicht lesbare Datei, kein JSON-Objekt,
-        # nicht auswertbarer Feldwert. Eine kaputte 'wt3000.json' - der
-        # haeufigste Konfigurationsfehler ueberhaupt - endete deshalb als
-        # Traceback statt mit der Zeile "Abbruch: ...", der Rueckgabewert 1 kam
-        # aus dem Traceback statt aus dem Skript, und in der Protokolldatei
-        # stand nichts, weil es sie noch nicht gab.
-        #
-        # Die Umstellung kostet nichts: der Name der Protokolldatei haengt nur
-        # an OUTPUT_DIR und am Zeitstempel, nicht an der Konfiguration. Die
-        # bisherige Reihenfolge war historisch, nicht sachlich.
-        #
-        # config_file_in_use() steht VOR from_environment(), damit die kaputte
-        # Datei auch dann benannt ist, wenn das Lesen scheitert.
+        # Herkunft vor dem Lesen protokollieren; so bleibt auch fehlerhaftes
+        # JSON einem konkreten Pfad zuordenbar.
         log.info("Konfigurationsdatei: %s", config_file_in_use() or "<keine, Voreinstellungen>")
         config = WTConfig.from_environment()
         log.info("Verbindung: %s", config.describe())

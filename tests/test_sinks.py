@@ -1,12 +1,7 @@
 # =============================================================================
 # Datei: tests/test_sinks.py
-# NEU (ROADMAP M4-2): das Sink-Protocol und seine Implementierungen.
-#
-# Die eine Zusage, um die es in M4-2 geht, steht in
-# 'test_zweites_format_ohne_eine_zeile_aenderung_an_der_schleife' ganz unten:
-# eine Senke, die es im Paket gar nicht gibt, wird von der Messschleife
-# bedient, ohne dass an ihr etwas geaendert waere. Alles davor sichert die
-# Einzelteile ab, die das moeglich machen.
+# Tests des Sink-Protocols und seiner Implementierungen. Auch eine externe
+# Senke muss ohne Anpassung der Messschleife funktionieren.
 # =============================================================================
 
 from __future__ import annotations
@@ -101,7 +96,7 @@ def test_close_vertraegt_mehrfachen_aufruf(tmp_path, senke_bauen):
 
 
 # ---------------------------------------------------------------------------
-# 2 - Befund B-07 gilt fuer jede Senke, nicht nur fuer die CSV
+# 2 - Die Spaltenregel gilt fuer jede Senke, nicht nur fuer CSV
 # ---------------------------------------------------------------------------
 
 
@@ -265,7 +260,7 @@ def test_multisink_schliesst_alle_auch_wenn_eine_scheitert():
 
 
 # ---------------------------------------------------------------------------
-# 5 - Das 'Fertig, wenn' aus M4-2
+# 5 - Erweiterbarkeit
 # ---------------------------------------------------------------------------
 
 
@@ -276,7 +271,7 @@ def messschleifen_antworten(zyklen: int) -> dict:
         ":NUMeric:HOLD?": "0",
         ":NUMeric:NORMal:VALue?": bloecke,
         ":STATus:CONDition?": "16",
-        # NEU (ROADMAP M3-3): die Messschleife fragt die Geraeterate ab, um
+        # Die Messschleife fragt die Geraeterate ab, um
         # den Takt dagegen zu pruefen. Der Eintrag fehlte hier - und dass er
         # gefehlt hat, hat FakeTransport gemeldet statt still etwas zu
         # erfinden. Genau dafuer gibt es die KeyError-Regel.
@@ -285,12 +280,12 @@ def messschleifen_antworten(zyklen: int) -> dict:
 
 
 def test_zweites_format_ohne_eine_zeile_aenderung_an_der_schleife(tmp_path):
-    """DAS Abnahmekriterium von M4-2.
+    """Eine externe Senke funktioniert ohne Aenderung der Messschleife.
 
     'ListeSink' gibt es im Paket nicht und wird von nichts importiert. Sie
     erfuellt nur den Vertrag - und die Messschleife bedient sie, oeffnet sie
     mit den Spalten aus der Item-Tabelle und schliesst sie am Ende. Genau das
-    war vor M4-2 unmoeglich: dort stand 'CsvRecorder' fest in der Signatur.
+    Die Schleife kennt dabei nur den SampleSink-Vertrag.
     """
 
     class ListeSink:
@@ -331,7 +326,7 @@ def test_zweites_format_ohne_eine_zeile_aenderung_an_der_schleife(tmp_path):
     assert stats.samples == 3
     # Die Schleife hat die Senke in Betrieb genommen und wieder abgeraeumt.
     assert senke.columns == ["U1", "I1", "P1"]
-    # UEBERARBEITET (ROADMAP M3-3/M4-3): Die Angaben des Aufrufers gehen
+    # Die Angaben des Aufrufers gehen
     # unveraendert durch; die Schleife legt zwei Dinge dazu, die nur sie
     # kennt - die gelesene Geraeterate und die Einheiten der Spalten. Ohne
     # die Rate laesst sich eine Dublettenzahl nicht beurteilen, ohne die
@@ -348,7 +343,7 @@ def test_zweites_format_ohne_eine_zeile_aenderung_an_der_schleife(tmp_path):
 
 
 def test_spaltenkopf_stammt_aus_der_item_tabelle_nicht_vom_aufrufer(tmp_path):
-    """UEBERARBEITET (M4-2): dadurch koennen Kopf und Daten nicht auseinanderlaufen."""
+    """Dadurch koennen Kopf und Daten nicht auseinanderlaufen."""
     transport = FakeTransport(messschleifen_antworten(1))
     sess = WTSession(transport, WTConfig())
     tabelle = ItemTable.read_from_device(sess)

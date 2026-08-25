@@ -1,25 +1,7 @@
 # =============================================================================
 # Datei: tests/test_range_scope_guard.py
-# NEU (Schritt 4 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-03): RangeAccess
-# prueft die Elementnummer, bevor ein Kommando die Leitung erreicht.
-#
-# Der Befund A-03: 'RangeAccess' kennt seine bestueckten Elemente
-# (self._elements) und hat mit 'expand_scope()' eine Methode, die einen Scope
-# dagegen prueft. 'set_range()' und 'get_range()' benutzten sie nicht - sie
-# gingen direkt ueber 'scope_suffix(scope)', das jede Zahl in ':ELEMent<n>'
-# uebersetzt, ohne zu fragen, ob es das Element gibt. 'expand_scope()' wurde
-# ausschliesslich aus 'wt3000_ranging' heraus aufgerufen.
-#
-# Das ist der Kernbefund der Analyse in Reinform: die Schutzregel liegt eine
-# Schicht ueber dem Knoten, den sie schuetzt. Layer 4 darf Layer 2 direkt
-# aufrufen - und tut es (beide Geraeteskripte, jeder Anwender, der 'wt.ranges'
-# aus der Fassade zieht). Wer an Layer 3 vorbeigreift, verliert die Regel.
-#
-# UEBER DIE ANALYSE HINAUS: sie nennt nur 'set_range()'/'get_range()'. Beim
-# Nachsehen haben 'get_auto()' und 'set_auto()' exakt dieselbe Luecke - auch
-# sie gehen direkt ueber 'scope_suffix(scope)'. Ein Autorange-Kommando an ein
-# nicht bestuecktes Element ist derselbe Fehler; die Tests decken deshalb alle
-# vier Methoden ab.
+# RangeAccess prueft die Elementnummer vor jedem Kommando. Die Schutzregel gilt
+# fuer get/set_range() und get/set_auto(), auch bei direkter Nutzung ohne Plan.
 # =============================================================================
 
 from __future__ import annotations

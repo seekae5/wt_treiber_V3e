@@ -1,20 +1,8 @@
 # =============================================================================
 # Datei: tests/test_probe_range_tools.py
-# NEU (Schritt 2 aus MarkDowns/PLAN_AUFRUFKETTE.md, Befund A-02): die beiden
-# Geraeteskripte unter tools/hardware/ sind maschinell geprueft.
-#
-# Der Befund A-02: beide Skripte SCHREIBEN einen Messbereich an ein
-# eingemessenes Geraet. Ihr Dateikopf sagt zu, der Ausgangswert werde "vor dem
-# Schreiben gelesen und danach zurueckgesetzt" - das galt aber nur auf dem
-# glatten Weg. Zwischen set_range() und der Rueckstellung lagen ein Query und
-# zwei Protokollausgaben; jede Ausnahme dort, und ein Strg+C an jeder Stelle,
-# liess den Testwert auf Element 4 stehen. Danach wurde auch assert_no_error()
-# uebersprungen, der Lauf endete also ohne Pruefung der Fehlerqueue.
-#
-# Dazu zwei weitere Schwaechen: der zurueckgelesene Wert wurde NICHT mit dem
-# gesendeten verglichen (main() gab auch dann 0 zurueck, wenn das Geraet den
-# Wert gar nicht uebernommen hatte), und REMOTE wurde nie eingeschaltet,
-# obwohl WTConfig.use_remote in der Voreinstellung True ist.
+# Maschinelle Tests der beiden schreibenden Geraeteskripte. Sie sichern die
+# Rueckstellung auch bei Fehlern und Strg+C, Ruecklesevergleich, Fehlerqueue
+# und den ausdruecklichen REMOTE-Zustand ab.
 #
 # WICHTIG - warum diese Datei die Skripte ueber den DATEIPFAD laedt und nicht
 # ueber einen Import: tools/hardware/ ist kein Paket, und ein sys.path-Eintrag

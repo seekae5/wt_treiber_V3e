@@ -33,12 +33,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-# UEBERARBEITET (Punkt 4, src-Layout): paketrelative Importe.
-from .wt3000_common import canonical_scope  # UEBERARBEITET (RANGEIO-2): values_match
-                                           # wird nicht mehr direkt gebraucht -
-                                           # Bereiche vergleicht ranges_match().
+from .wt3000_common import canonical_scope
 from .wt3000_core import WTError
-# UEBERARBEITET (RANGEIO-2): RangeValue/ranges_match tragen die Eingangsart mit.
 from .wt3000_rangeio import Quantity, RangeAccess, RangeValue, ranges_match
 
 _log = logging.getLogger("wt3000.ranging")
@@ -59,8 +55,8 @@ class RangeSpec:
     scope: Elementnummer, 'SIGMA', 'SIGMB' oder 'ALL'.
     Ein fester Bereich impliziert Autorange AUS - das erledigt apply_plan().
 
-    UEBERARBEITET (RANGEIO-2): sensor=True bezeichnet den Bereich des externen
-    Stromsensoreingangs. Der Wert ist dann eine SPANNUNG in Volt. Ohne dieses
+    sensor=True bezeichnet den Bereich des externen Stromsensoreingangs. Der
+    Wert ist dann eine SPANNUNG in Volt. Ohne dieses
     Kennzeichen liesse sich ein Sensorelement nicht widerspruchsfrei
     beschreiben - und ein Amperewert an einem Sensoreingang waere keine
     Rundungsfrage, sondern eine Fehlkonfiguration.
@@ -142,8 +138,7 @@ class RangePlan:
         if self.is_empty():
             raise WTError("Leerer RangePlan")
 
-        # UEBERARBEITET (RANGEIO-2): Der Konfliktschluessel traegt jetzt Wert UND
-        # Eingangsart. 10 A direkt und 10 V am Sensor sind nicht derselbe Zustand.
+        # Zahlenwert und Eingangsart bilden gemeinsam den Konfliktschluessel.
         fixed: dict[tuple[Quantity, int], RangeValue] = {}
         for spec in self.ranges:
             if spec.value <= 0:
@@ -163,8 +158,8 @@ class RangePlan:
                     )
                 fixed[key] = spec.range_value
 
-        # UEBERARBEITET (RANGEIO-2): Eingangsart gegen das Geraet pruefen, BEVOR
-        # das erste Set-Kommando faellt. Elemente 1-3 haengen an externen
+        # Eingangsart pruefen, bevor das erste Set-Kommando faellt. Elemente 1-3
+        # haengen an externen
         # Stromsensoren; ein Amperewert wuerde dort die Sensorbeschaltung aus
         # der Konfiguration werfen. Kostet hoechstens vier Abfragen und faellt
         # sonst erst am bereits veraenderten Geraet auf.
@@ -208,11 +203,7 @@ class RangePlan:
 
 @dataclass(frozen=True)
 class ElementRangeState:
-    """Bereichszustand eines einzelnen Elements.
-
-    UEBERARBEITET (RANGEIO-2): Die Bereiche sind RangeValue statt float und
-    fuehren damit die Eingangsart mit.
-    """
+    """Bereichszustand eines Elements einschliesslich der Eingangsart."""
 
     element: int
     voltage_range: RangeValue
@@ -277,8 +268,7 @@ class RangeBackup:
         """Gesicherten Zustand tabellarisch protokollieren."""
         _log.info("%-8s %16s %6s %16s %6s", "Element", "U-Bereich", "U-Auto", "I-Bereich", "I-Auto")
         for s in self.states:
-            # UEBERARBEITET (RANGEIO-2): Einheit und Eingangsart mit ausgeben -
-            # '10 V (Sensor)' ist etwas anderes als '10 A'.
+            # Einheit und Eingangsart gehoeren zum Bereichswert.
             _log.info(
                 "%-8d %16s %6s %16s %6s",
                 s.element,
@@ -301,8 +291,7 @@ class RangeBackup:
                     "voltage_range": s.voltage_range.value,
                     "voltage_auto": s.voltage_auto,
                     "current_range": s.current_range.value,
-                    # UEBERARBEITET (RANGEIO-2): Eingangsart mitschreiben, sonst
-                    # laesst sich ein Sensorbereich nicht korrekt zurueckstellen.
+                    # Eingangsart fuer eine korrekte Rueckstellung mitsichern.
                     "current_sensor": s.current_range.sensor,
                     "current_auto": s.current_auto,
                 }
@@ -315,8 +304,7 @@ class RangeBackup:
         """Gegenstueck zu to_dict()."""
         return cls(
             states=tuple(
-                # UEBERARBEITET (RANGEIO-2): 'current_sensor' fehlt in aelteren
-                # Backupdateien - dort galt implizit der Direkteingang.
+                # Aeltere Backups ohne 'current_sensor' bedeuten Direkteingang.
                 ElementRangeState(
                     element=int(d["element"]),
                     voltage_range=RangeValue(float(d["voltage_range"])),
@@ -354,8 +342,7 @@ class RangeBackup:
                 problems.append(f"Element {mine.element} fehlt im Vergleichszustand")
                 continue
             for quantity in Quantity:
-                # UEBERARBEITET (RANGEIO-2): Ein Wechsel der Eingangsart ist
-                # immer eine Abweichung, auch bei gleichem Zahlenwert.
+                # Die Eingangsart zaehlt auch bei gleichem Zahlenwert.
                 if not ranges_match(
                     mine.range_of(quantity), theirs.range_of(quantity), tolerance
                 ):
@@ -387,9 +374,6 @@ def check_preconditions(access: RangeAccess) -> None:
     _log.info("Wiring: %s | Module: %s", access.get_wiring(), access.get_module())
 
 
-# UEBERARBEITET (F-09, siehe AENDERUNGEN_2026-08-18.md): hiess bis hierher
-# 'probe_write_capability' - genau wie die gleichnamige Funktion in
-# wt3000_itemspec.py, die eine Item-Tabelle anfasst. Siehe dort.
 def probe_range_write_capability(access: RangeAccess, backup: RangeBackup) -> None:
     """Den Schreibpfad testen, ohne etwas zu veraendern.
 
@@ -401,9 +385,7 @@ def probe_range_write_capability(access: RangeAccess, backup: RangeBackup) -> No
     ':INPut' noetig ist - fuer ':NUMeric' ist es das nachweislich nicht.
     """
     element = access.elements[0]
-    # UEBERARBEITET (RANGEIO-2): RangeValue statt float. Der Spannungspfad kennt
-    # keinen Sensoreingang; das Kennzeichen wird trotzdem durchgereicht, damit
-    # hier keine zweite Sonderregel entsteht.
+    # RangeValue durchreichen, damit keine zweite Sonderregel entsteht.
     current = backup.state_of(element).range_of(Quantity.VOLTAGE)
 
     _log.info("Schreibprobe: Element %d wird auf seinen eigenen Wert %s gesetzt",
@@ -446,7 +428,6 @@ def apply_plan(access: RangeAccess, plan: RangePlan) -> int:
         written += 1
 
     for spec in plan.ranges:
-        # UEBERARBEITET (RANGEIO-2): Eingangsart mitgeben.
         access.set_range(spec.quantity, spec.scope, spec.range_value)
         written += 1
 
@@ -482,7 +463,6 @@ def verify_plan(
     for spec in plan.ranges:
         for element in access.expand_scope(spec.scope):
             actual = access.get_range(spec.quantity, element)
-            # UEBERARBEITET (RANGEIO-2): Vergleich schliesst die Eingangsart ein.
             if ranges_match(spec.range_value, actual, tolerance):
                 continue
             message = (
@@ -531,9 +511,7 @@ def restore_ranges(access: RangeAccess, backup: RangeBackup, force: bool = False
         # Erst entscheiden, was ueberhaupt anzufassen ist. Die Entscheidung
         # muss VOR dem ersten Schreibkommando fallen, sonst vergleicht Schritt 3
         # gegen einen Zustand, den Schritt 1 bereits veraendert hat.
-        # UEBERARBEITET (RANGEIO-2): Zielwert ist ein RangeValue - ein
-        # Sensorbereich wird als 'EXTernal,<Volt>' zurueckgeschrieben und nicht
-        # als Amperewert.
+        # RangeValue erhaelt beim Restore die Eingangsart des Backups.
         plan_per_element: list[tuple[int, RangeValue, bool, bool, bool]] = []
         for state in backup.states:
             target_range = state.range_of(quantity)
@@ -622,7 +600,7 @@ def applied_ranges(
     report = RangeReport(backup=backup)
 
     try:
-        probe_range_write_capability(access, backup)   # UEBERARBEITET (F-09)
+        probe_range_write_capability(access, backup)
         report.commands_written = apply_plan(access, plan)
         report.problems = verify_plan(access, plan, tolerance, allow_snapping)
         if report.problems:
