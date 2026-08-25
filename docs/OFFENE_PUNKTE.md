@@ -1,7 +1,7 @@
 # Offene Punkte — geprüfter Stand 2026-08-20
 
 **Projekt:** `wt3000-scpi 0.3.0`  
-**Basis:** aktueller Quellstand, 725 bestandene Tests, Ruff und Mypy ohne Befund  
+**Basis:** aktueller Quellstand, 758 bestandene Tests, Ruff und Mypy ohne Befund  
 **Abgrenzung:** Geräteverhalten ist nur dort als belegt bezeichnet, wo der Bestand
 einen konkreten Geräteversuch dokumentiert.
 
@@ -96,14 +96,21 @@ Profile zentral erfasst. Laufparameter liegen noch teilweise als Modulkonstanten
 **Ziel:** Stufenskripte als Beispiele erhalten, gemeinsamen Ablauf über Fassade und
 spätere CLI führen und Profile zentral benennen. Gehört zu M2-5/M5-2.
 
-### S-07 — Messsteuerung braucht vorab zwei Entscheidungen
+### S-07 — Messsteuerung braucht vorab zwei Entscheidungen — **erste erledigt (M3-1)**
 
-Vor M3-1 ist festzulegen, ob `WTSession` intern serialisiert oder eine Sitzung exklusiv
-einem Mess-Thread gehört. Außerdem ist die Bedeutung von `use_hold=False` eindeutig zu
-machen: „HOLD nicht anfassen“ oder „HOLD muss aus sein“.
+**Erledigt am 25.08.2026:** Die Frage „serialisiert `WTSession` intern **oder** gehört
+sie exklusiv einem Mess-Thread?" ist mit **beides** beantwortet. Das `RLock` liegt um
+`write`, `query`, `query_raw`, `query_block` und `drain_after_failure` und schließt die
+stille Antwortvertauschung für jeden Nebenläufigkeitsfall; darauf sitzt die Besitzregel,
+die einen Fremdzugriff ablehnt statt ihn bloß zu serialisieren — ein Zugriff mitten in
+der Messreihe wäre zwar sicher, aber nicht sinnvoll, weil er den nächsten Takt
+verschiebt. Sitzungsbesitz, Stoppsignal, Fehlerweitergabe und Cleanup sind als Vertrag in
+den Klassenköpfen von `WTSession` und `Measurement` beschrieben und in
+[tests/test_messsteuerung.py](../tests/test_messsteuerung.py) belegt.
 
-**Ziel:** Sitzungsbesitz, Stoppsignal, Fehlerweitergabe und Cleanup als Vertrag der
-steuerbaren Messung dokumentieren und testen.
+**Offen bleibt:** die Bedeutung von `use_hold=False` eindeutig zu machen — „HOLD nicht
+anfassen" oder „HOLD muss aus sein". Die steuerbare Messung hat daran nichts geändert;
+sie reicht den Schalter unverändert an `NumericHold` weiter.
 
 ### S-08 — Fehlende Zyklen und strenge Spaltenzahl kollidieren
 
@@ -156,7 +163,7 @@ Die folgenden Aussagen aus den entfernten Momentaufnahmen sind nicht mehr offen:
 | Blockheader erzeugt nackte `ValueError` | P-4: vollständige Validierung als `ProtocolError` |
 | Installation und Python-Version seien nicht deklariert | `pyproject.toml` mit Python ≥ 3.10 und Abhängigkeitsgruppen ist vorhanden |
 | Verbindungsdaten seien feste Quellcodewerte | P-7: Parameter, Umgebung und JSON-Konfiguration; neutrale Defaults |
-| Tests liefen lokal nicht | Projektumgebung vorhanden; 725 Tests aktuell ausgeführt |
+| Tests liefen lokal nicht | Projektumgebung vorhanden; 758 Tests aktuell ausgeführt |
 | Kein Linting, keine Typprüfung, gemischte Zeilenenden | Ruff, Mypy und `.gitattributes` sind eingerichtet |
 | `wt3000_core.py` enthalte einen großen auskommentierten Transportklon | Kommentarbereinigung abgeschlossen |
 | Export sei fest an CSV gekoppelt | M4-1/M4-2: `Sample`, `SampleSink` und vier Senken |
@@ -166,6 +173,8 @@ Die folgenden Aussagen aus den entfernten Momentaufnahmen sind nicht mehr offen:
 | Messwerte tragen keine Einheiten | M4-3: `unit_of()`, `units` in Metadaten, JSONL und Sidecar; CSV auf Wunsch |
 | `InputConfig` adressiert `ALL` gegen eine feste Elementliste | M1-3: Elementliste aus `DeviceInfo`, Elementnummer geprüft |
 | Schleifentakt und Geräterate seien unverbunden, Dubletten unerkennbar | M3-3: Taktprüfung vorab, `SampleMark.DUPLICATE` während des Laufs, Rate in den Metadaten |
+| Messung sei nur blockierend, kein `stop()` von außen | M3-1: `Measurement` mit `start()`, `stop()`, `wait()`, `is_running`; Generator `stream()` |
+| `WTSession` sei nicht threadsicher, kein Lock im ganzen Paket | M3-1/A2: `RLock` um alle I/O-Pfade, dazu exklusiver Sitzungsbesitz während einer Messung |
 
 ---
 
@@ -175,8 +184,10 @@ Die folgenden Aussagen aus den entfernten Momentaufnahmen sind nicht mehr offen:
 2. M2-5/S-02, damit neue Konfigurationsgruppen nicht auf einer weiteren
    Parserkopie aufbauen (M1-3/S-01 ist bis auf die Bereichstabellen erledigt)
 3. M1-5/S-03 und S-05 für robuste Fehlerpfade; danach M3-4 (Verbindungsabbruch
-   überleben) — für unbeaufsichtigte Läufe die wichtigste offene Maßnahme
-4. M3-1/S-07 für eine steuerbare Messung
+   überleben) — seit M3-1 erledigt ist, **die wichtigste offene Maßnahme überhaupt**
+   und das Einzige, was den unbeaufsichtigten Langzeitlauf noch von der Eignung trennt
+4. ~~M3-1/S-07 für eine steuerbare Messung~~ — **erledigt 25.08.2026**; von S-07 bleibt
+   nur die Bedeutung von `use_hold=False`
 5. M4-3 und M2-1 für interpretierbare Daten und die fehlenden Gerätegruppen
 
 Die ausführlichen Abnahmekriterien und Abhängigkeiten stehen in

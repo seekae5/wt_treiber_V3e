@@ -1,10 +1,11 @@
 # Roadmap — vom Stufenskript zur Treiberbibliothek
 
-**Stand:** 2026-08-20, `wt3000-scpi 0.3.0`
+**Stand:** 2026-08-25, `wt3000-scpi 0.3.0`
 
-**Abgeschlossen:** M1-1, M1-2, M4-1, M4-2 sowie die Befundpakete P-1…P-8
+**Abgeschlossen:** M1-1, M1-2, M1-4, M3-1, M3-3, M4-1, M4-2, M4-3 sowie die
+Befundpakete P-1…P-8
 
-**Prüfstand:** 725 Tests, Ruff und Mypy ohne Befund
+**Prüfstand:** 758 Tests, Abdeckung 90 %, Ruff und Mypy ohne Befund
 
 **Bezug:** [OFFENE_PUNKTE.md](OFFENE_PUNKTE.md) ·
 [AENDERUNGEN_2026-08-18.md](AENDERUNGEN_2026-08-18.md)
@@ -29,9 +30,9 @@ Die Kommandoübersicht ist eine Geräte- und keine Implementierungsübersicht.
 | Gerätekonfiguration lesen | `DeviceInfo` liest Identifikation, Verdrahtung, Modultypen und Bestückung, auffrischbar über `refresh_device()`; Metadatenabzug liest weitere Gruppen roh | strukturierter Snapshot für Kommunikation, Averaging, Frequenzquelle, Integration, Harmonische und System | **30 %** |
 | Gerätekonfiguration einstellen | sichere Schreib- und Restoremuster für Item-Tabelle, Bereiche und Eingangskonfiguration | Gerätegruppen jenseits `:INPut`, ein gemeinsames Backup, Setup-Speicher | **15 %** |
 | Messkonfiguration | `InputConfig`, `RangePlan`, Snapshots, Diff und Restore | geräteabhängige Element-/Bereichstabellen, `InputPlan`, Eingangsart und unabhängiger Modus setzen | **75 %** |
-| Messsteuerung | blockierende Messschleife, HOLD, driftfreie Taktung, Taktkopplung und Dublettenerkennung, Statistik, `Sample` | start-/stoppbares Objekt, Generator, Geräteintegration, Ereignistakt, Wiederverbindung | **45 %** |
+| Messsteuerung | blockierende Messschleife, HOLD, driftfreie Taktung, Taktkopplung und Dublettenerkennung, Statistik, `Sample`; **start-/stoppbares `Measurement`, Generator `stream()`, Sitzungsbesitz (M3-1)** | Ereignistakt (hängt an M0-5), Wiederverbindung (M3-4) | **70 %** |
 | Datenexport | `SampleSink`, CSV, JSONL, Callback und Bündel; strenge Spaltenregel; Einheiten an den Daten | verbindliche Metadaten, Rotation und Fortsetzung | **85 %** |
-| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 725 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
+| Querschnitt | Transport-Protokoll, FakeTransport, Fassade, Konfigurationsauflösung, 758 gerätefreie Tests, Ruff, Mypy, LF-Regel | robuste Fehlerpfade, CI, Paketmetadaten, gemeinsame CLI | **solide Basis** |
 
 Die Fassade und der austauschbare Export sind nicht mehr Zielbild, sondern Bestand.
 Der Schwerpunkt liegt jetzt auf Hardwarebelegen, vollständiger Konfiguration und einer
@@ -46,7 +47,7 @@ steuerbaren Langzeitmessung.
 | M0 — Gerätefragen | **teilweise** | ein protokollierter Gerätetermin; Spannungssyntax ist bereits belegt |
 | M1 — Fundament | **teilweise** | M1-3 weitgehend und M1-4 umgesetzt; offen: Bereichstabellen nach Modultyp und M1-5 |
 | M2 — Konfiguration | **teilweise** | M2-1 zur Hälfte und M2-4 umgesetzt; offen: M2-2, M2-3, M2-5 |
-| M3 — Messsteuerung | **teilweise** | M3-2 Integration und M3-3 Ersatzweg umgesetzt; Sitzungsbesitz entscheiden, danach M3-1 |
+| M3 — Messsteuerung | **teilweise** | M3-1 steuerbares Objekt, M3-2 Integration und M3-3 Ersatzweg umgesetzt; offen: M3-4 (Verbindungsabbruch überleben) |
 | M4 — Export | **teilweise** | M4-3 Einheiten umgesetzt; offen: verbindliche Metadaten und M4-4 |
 | M5 — Auslieferung | **teilweise** | CLI, Paketmetadaten und CI |
 
@@ -300,19 +301,49 @@ implementiert ist.
 
 ## M3 — Messung starten und stoppen
 
-### M3-1 — Aufzeichnung als steuerbares Objekt `M`
+### M3-1 — Aufzeichnung als steuerbares Objekt `M` — **umgesetzt 2026-08-25**
 
-Vorher ist zu entscheiden, ob `WTSession` intern serialisiert oder exklusiv dem
-Mess-Thread gehört.
+**Vorentscheidung getroffen:** `WTSession` tut **beides** — sie serialisiert intern
+(`RLock` um `write`, `query`, `query_raw`, `query_block`, `drain_after_failure`) **und**
+gehört während einer Messung exklusiv dem Mess-Thread. Das Lock ist der Mechanismus, der
+Besitz die Regel; die Prüfung sitzt in `WTSession` und nicht in der Fassade, weil die
+Fachobjekte zwischengespeichert werden und eine vor dem Start geholte Referenz sonst an
+jeder Fassadenprüfung vorbeikäme. Ein Fremdzugriff endet in `ConcurrentAccessError`.
 
-- Klasse `Measurement` mit `start()`, `stop()`, `wait()`, `is_running` und Statistik
-- `threading.Event` als sofortiges Stoppsignal
-- Fehler aus dem Thread bei `wait()`/`stop()` erneut auslösen
-- Generator `wt.measure.stream()` als einfacher Weg ohne Hintergrundthread
-- Cleanup im ausführenden Ablauf, nicht nur beim Aufrufer
+- [x] **Klasse `Measurement`** mit `start()`, `stop()`, `wait()`, `is_running`, `stats`
+  und `error` — in [wt3000_measure.py](../src/wt3000_scpi/wt3000_measure.py), erreichbar
+  über `wt.measure.start()`
+- [x] **`threading.Event` als sofortiges Stoppsignal.** Das Warten zwischen zwei Takten
+  ist `stop_event.wait()` und nicht `time.sleep()` — sonst griffe ein `stop()` erst nach
+  dem laufenden Intervall, bei `:RATE 20 s` also bis zu zwanzig Sekunden später. Ein Test
+  misst gegen einen 3-s-Takt und fällt bei einem Rückbau.
+- [x] **Fehler aus dem Thread** bei `wait()`/`stop()` erneut auslösen. Ohne das endete
+  eine Ausnahme im Mess-Thread als Textausgabe von `threading` — als etwas, das kein
+  `except` fängt und keine Ablaufsteuerung bemerkt.
+- [x] **Generator `wt.measure.stream()`** ohne Hintergrundthread. Dort bleibt die Sitzung
+  zwischen zwei Samples frei, und Strg+C wirkt normal.
+- [x] **Cleanup im ausführenden Ablauf.** Die Senke wird vom Mess-Thread geöffnet *und*
+  geschlossen; HOLD nimmt der Generator in seinem `finally` zurück — auch bei `stop()`,
+  bei einem Fehler und bei einem Abbruch mitten im Schleifenrumpf (dafür der
+  ausdrückliche `strom.close()`).
+- [x] **Ein gemeinsamer Rumpf.** `run_measurement_loop()`, `Measurement` und `stream()`
+  sitzen alle auf dem Generator `iter_samples()`; eine zweite Signatur ist nicht
+  entstanden.
 
-`Sample` und `SampleSink` sind bereits vorhanden; die Schleife muss dafür nicht erneut
-an ein Ausgabeformat angepasst werden.
+**Zuständigkeit für den Gerätezustand — entschieden:** Bereiche und Item-Tabelle bleiben
+beim **Aufrufer** (`applied_ranges()`, `ItemAccess.applied()`) und wandern *nicht* in den
+Thread. Läge die Rückstellung im Thread, geschähe sie als Gerätezugriff zu einem
+Zeitpunkt, den der Aufrufer nicht kennt. Damit die Konfigurationsklammer nicht vor der
+Messung schließen kann, ist `Measurement` selbst ein Context Manager, und
+`WT3000.close()` beendet eine noch laufende Messung, bevor es selbst ans Gerät geht.
+
+`Sample` und `SampleSink` waren bereits vorhanden; die Schleife musste dafür nicht erneut
+an ein Ausgabeformat angepasst werden — aus `sink.write(...)` wurde das `yield`, das M4-1
+hier vorgesehen hatte.
+
+**Fertig, wenn:** erfüllt. 32 gerätefreie Fälle in
+[tests/test_messsteuerung.py](../tests/test_messsteuerung.py); drei Mutationsproben
+(Lock, Besitzprüfung, Stoppsignal) greifen.
 
 ### M3-2 — Gerätesteuerung `M · am Gerät` — **teilweise umgesetzt 2026-08-21**
 

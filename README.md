@@ -67,7 +67,7 @@ konfigurierten Werkzeuge laufen ohne Argumente und sind **heute vollständig gr�
 ```bash
 ruff check .    # Stil und ungenutzte Namen (E/F/W, Zeilenlänge 100)
 mypy            # Typprüfung über src/, Zielplattform Windows
-pytest          # 725 Fälle, unter einer Sekunde
+pytest          # 758 Fälle, wenige Sekunden
 ```
 
 Die Einstellungen stehen in [pyproject.toml](pyproject.toml), jeweils mit Begründung —
@@ -295,7 +295,7 @@ Für PyCharm liegen fertige Startkonfigurationen unter [.run/](.run).
 ## Tests
 
 ```bash
-pytest                                  # 725 Tests, unter einer Sekunde
+pytest                                  # 758 Tests, wenige Sekunden
 pytest tests/test_device_facade.py -v   # nur die Fassade
 ```
 
